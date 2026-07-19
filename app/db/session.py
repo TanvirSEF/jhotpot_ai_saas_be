@@ -1,10 +1,9 @@
-"""Database engine, session factory, declarative Base, and the `get_db` dependency."""
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from app.core.config import settings
 
-# SQLite needs this to allow usage across threads; harmless for other backends.
+# sqlite needs this for cross-thread use
 connect_args = (
     {"check_same_thread": False}
     if settings.DATABASE_URL.startswith("sqlite")
@@ -12,20 +11,14 @@ connect_args = (
 )
 
 engine = create_engine(
-    settings.DATABASE_URL,
-    connect_args=connect_args,
-    pool_pre_ping=True,
-    future=True,
+    settings.DATABASE_URL, connect_args=connect_args, pool_pre_ping=True
 )
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
 
 
 def get_db():
-    """FastAPI dependency that yields a per-request DB session."""
-    db: Session = SessionLocal()
+    db = SessionLocal()
     try:
         yield db
     finally:

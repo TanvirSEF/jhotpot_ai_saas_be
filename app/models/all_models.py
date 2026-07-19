@@ -1,8 +1,3 @@
-"""SQLAlchemy models.
-
-Importing this module (done in app.main) registers the models on `Base.metadata`
-so that `Base.metadata.create_all(...)` can create their tables.
-"""
 from datetime import datetime
 
 from sqlalchemy import DateTime, String, func
@@ -16,7 +11,7 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    full_name: Mapped[str | None] = mapped_column(String(255))
     hashed_password: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

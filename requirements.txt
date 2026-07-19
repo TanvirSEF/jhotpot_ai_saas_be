@@ -1,26 +1,17 @@
-# ─────────────────────────────────────────────
-# NexusSuite API — Python dependencies
-# (keep this file UTF-8; regenerate with: python -m pip freeze)
-# ─────────────────────────────────────────────
-
-# Web framework / ASGI server
+# web
 fastapi==0.139.2
 uvicorn[standard]==0.51.0
 pydantic==2.13.4
-
-# Config (.env)
 pydantic-settings==2.14.2
 python-dotenv==1.2.2
 
-# Database — async PostgreSQL (asyncpg) + pgvector for vector similarity search
+# db
 SQLAlchemy[asyncio]==2.0.51
 asyncpg==0.31.0
 pgvector==0.5.0
 
-# Security: password hashing + JWT
+# auth
 bcrypt==5.0.0
 PyJWT==2.13.0
-
-# Request parsing / validation
 python-multipart==0.0.32
 email-validator==2.3.0

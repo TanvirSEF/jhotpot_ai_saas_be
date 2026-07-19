@@ -1,4 +1,3 @@
-"""Facebook bot routes (placeholder)."""
 from fastapi import APIRouter
 
 router = APIRouter(prefix="/bot", tags=["bot"])
@@ -10,6 +9,5 @@ def bot_status():
 
 
 @router.get("/webhook")
-def webhook_verify():
-    """Stub for Meta's webhook verification step."""
-    return {"detail": "webhook verification not implemented yet"}
+def webhook():
+    return {"detail": "not implemented"}
