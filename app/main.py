@@ -11,8 +11,16 @@ from app.models import all_models  # noqa: F401  registers tables
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    import asyncio
+    from alembic.config import Config
+    from alembic import command
+
+    def run_migrations():
+        alembic_cfg = Config("alembic.ini")
+        command.upgrade(alembic_cfg, "head")
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, run_migrations)
     yield
 
 

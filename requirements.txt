@@ -10,6 +10,7 @@ SQLAlchemy[asyncio]==2.0.51
 asyncpg==0.31.0
 aiosqlite==0.22.1
 pgvector==0.5.0
+alembic==1.13.1
 
 # auth
 bcrypt==5.0.0
