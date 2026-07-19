@@ -6,7 +6,8 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     BACKEND_CORS_ORIGINS: list[str] = ["*"]
 
-    DATABASE_URL: str = "sqlite:///./nexussuite.db"
+    # sqlite+aiosqlite (dev) or postgresql+asyncpg://... (prod)
+    DATABASE_URL: str = "sqlite+aiosqlite:///./nexussuite.db"
 
     SECRET_KEY: str = "change-me"
     ALGORITHM: str = "HS256"

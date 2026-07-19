@@ -4,10 +4,10 @@ FastAPI backend for NexusSuite — auth, a Facebook bot service, and a CV/resume
 
 ## Tech stack
 
-- **FastAPI** + **Uvicorn** — web framework / ASGI server
-- **SQLAlchemy 2.0** — ORM (SQLite for dev, PostgreSQL for prod)
+- **FastAPI** + **Uvicorn** — async web framework / ASGI server
+- **SQLAlchemy 2.0 (async)** — ORM via async drivers (aiosqlite for dev, asyncpg for PostgreSQL)
 - **Pydantic v2** + **pydantic-settings** — validation & config
-- **PyJWT** + **passlib[bcrypt]** — JWT auth & password hashing
+- **PyJWT** + **bcrypt** — JWT auth & password hashing
 
 ## Project structure
 

@@ -1,25 +1,20 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
-# sqlite needs this for cross-thread use
-connect_args = (
-    {"check_same_thread": False}
-    if settings.DATABASE_URL.startswith("sqlite")
-    else {}
-)
-
-engine = create_engine(
-    settings.DATABASE_URL, connect_args=connect_args, pool_pre_ping=True
-)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-Base = declarative_base()
+engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+AsyncSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
+class Base(DeclarativeBase):
+    pass
+
+
+async def get_db():
+    async with AsyncSessionLocal() as db:
         yield db
-    finally:
-        db.close()
