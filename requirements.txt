@@ -1,24 +1,26 @@
 # ─────────────────────────────────────────────
 # NexusSuite API — Python dependencies
+# (keep this file UTF-8; regenerate with: python -m pip freeze)
 # ─────────────────────────────────────────────
 
-# Core web framework
+# Web framework / ASGI server
 fastapi==0.139.2
 uvicorn[standard]==0.51.0
 pydantic==2.13.4
 
-# Config / environment variables
-pydantic-settings>=2.5
+# Config (.env)
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
 
-# Database (SQLAlchemy 2.0). psycopg2-binary is for PostgreSQL;
-# SQLite works out of the box via the stdlib.
-SQLAlchemy>=2.0
-psycopg2-binary>=2.9
+# Database — async PostgreSQL (asyncpg) + pgvector for vector similarity search
+SQLAlchemy[asyncio]==2.0.51
+asyncpg==0.31.0
+pgvector==0.5.0
 
 # Security: password hashing + JWT
-bcrypt>=4.0
-PyJWT>=2.8
+bcrypt==5.0.0
+PyJWT==2.13.0
 
-# Form data parsing (OAuth2PasswordRequestForm, etc.) + email validation
-python-multipart>=0.0.9
-email-validator>=2.0
+# Request parsing / validation
+python-multipart==0.0.32
+email-validator==2.3.0
