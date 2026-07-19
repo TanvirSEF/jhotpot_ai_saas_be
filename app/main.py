@@ -14,13 +14,21 @@ async def lifespan(_app: FastAPI):
     import asyncio
     from alembic.config import Config
     from alembic import command
+    import redis as redis_client
 
+    # ── 1. Run pending Alembic migrations ──────────────────────────────────
     def run_migrations():
         alembic_cfg = Config("alembic.ini")
         command.upgrade(alembic_cfg, "head")
 
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, run_migrations)
+
+    # ── 2. Verify Redis connectivity (fail-fast) ───────────────────────────
+    r = redis_client.from_url(settings.REDIS_URL, socket_connect_timeout=5)
+    r.ping()  # raises ConnectionError if Redis is unreachable
+    r.close()
+
     yield
 
 

@@ -26,6 +26,10 @@ from app.core.config import settings
 from app.db.session import Base
 from app.models.all_models import User  # noqa: F401
 
+# Register pgvector type comparators so Alembic can autogenerate
+# migrations for VECTOR columns (used in knowledge_embeddings table).
+from pgvector.sqlalchemy import Vector  # noqa: F401
+
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 target_metadata = Base.metadata
 
