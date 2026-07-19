@@ -24,7 +24,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app.core.config import settings
 from app.db.session import Base
-from app.models.all_models import User  # noqa: F401
+from app.models import (  # noqa: F401
+    FbPage,
+    Faq,
+    KnowledgeEmbedding,
+    Organization,
+    Product,
+    User,
+)
 
 # Register pgvector type comparators so Alembic can autogenerate
 # migrations for VECTOR columns (used in knowledge_embeddings table).

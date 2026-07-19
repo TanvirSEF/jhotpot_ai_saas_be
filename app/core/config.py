@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     # Redis (broker + backend for Celery)
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    # Fernet key for AES encryption of Meta Page Access Tokens (PRD 6.2)
+    # Must be a URL-safe base64-encoded 32-byte key.
+    FERNET_KEY: str = "change-me"
+
     model_config = SettingsConfigDict(
         env_file=".env", case_sensitive=True, extra="ignore"
     )

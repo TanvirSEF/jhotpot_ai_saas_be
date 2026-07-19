@@ -5,8 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import auth, bot, resume
 from app.core.config import settings
-from app.db.session import Base, engine
-from app.models import all_models  # noqa: F401  registers tables
+from app.core.logging import get_logger
+from app.models import User  # noqa: F401 registers models with SQLAlchemy
+
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -16,7 +18,6 @@ async def lifespan(_app: FastAPI):
     from alembic import command
     import redis as redis_client
 
-    # ── 1. Run pending Alembic migrations ──────────────────────────────────
     def run_migrations():
         alembic_cfg = Config("alembic.ini")
         command.upgrade(alembic_cfg, "head")
@@ -24,9 +25,8 @@ async def lifespan(_app: FastAPI):
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, run_migrations)
 
-    # ── 2. Verify Redis connectivity (fail-fast) ───────────────────────────
     r = redis_client.from_url(settings.REDIS_URL, socket_connect_timeout=5)
-    r.ping()  # raises ConnectionError if Redis is unreachable
+    r.ping()
     r.close()
 
     yield

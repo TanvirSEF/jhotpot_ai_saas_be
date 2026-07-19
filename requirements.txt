@@ -12,6 +12,9 @@ aiosqlite==0.22.1
 pgvector==0.5.0
 alembic==1.13.1
 
+# encryption
+cryptography==42.0.5
+
 # task queue
 celery[redis]==5.3.6
 redis==5.0.3
