@@ -21,8 +21,10 @@ class LoginIn(BaseModel):
     password: str
 
 
+import uuid
+
 class UserOut(BaseModel):
-    id: int
+    id: uuid.UUID
     email: EmailStr
     full_name: str | None
 
