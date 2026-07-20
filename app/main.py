@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import auth, bot, resume, org
+from app.api.v1 import auth, bot, knowledge, resume, org
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models import User  # noqa: F401 registers models with SQLAlchemy
@@ -57,5 +57,6 @@ def health():
 
 app.include_router(auth.router, prefix=settings.API_V1_STR)
 app.include_router(org.router, prefix=settings.API_V1_STR)
+app.include_router(knowledge.router, prefix=settings.API_V1_STR)
 app.include_router(bot.router, prefix=settings.API_V1_STR)
 app.include_router(resume.router, prefix=settings.API_V1_STR)
