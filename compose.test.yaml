@@ -1,0 +1,30 @@
+services:
+  postgres-test:
+    image: pgvector/pgvector:0.8.2-pg16-bookworm
+    environment:
+      POSTGRES_DB: nexussuite_test
+      POSTGRES_USER: nexussuite
+      POSTGRES_PASSWORD: nexussuite_test_password
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexussuite -d nexussuite_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  redis-test:
+    image: redis:7.2-alpine
+    ports:
+      - "127.0.0.1:56379:6379"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 3s

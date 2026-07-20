@@ -5,8 +5,8 @@ Revises: e79e777a4bcc
 Create Date: 2026-07-20 00:06:57.669638
 
 MANUAL EDITS:
-  1. users.id INTEGER → UUID: PostgreSQL cannot ALTER a PRIMARY KEY column type
-     in-place. We DROP + recreate the users table (dev env, no real data).
+  1. users.id INTEGER → UUID is performed through a temporary UUID column so
+     existing user rows survive the migration.
   2. Added HNSW index on knowledge_embeddings.embedding for sub-20ms
      cosine similarity search (PRD §6.1).
 """
@@ -31,29 +31,39 @@ def upgrade() -> None:
     # It must exist before a VECTOR column or HNSW index can be created.
     op.execute('CREATE EXTENSION IF NOT EXISTS vector;')
 
-    # ── 1. Recreate `users` with UUID primary key ───────────────────────────
-    # PostgreSQL cannot directly cast INTEGER → UUID on a PK column.
-    # Since this is a development environment with no production data, we
-    # drop and recreate the table cleanly.
-    op.drop_index('ix_users_email', table_name='users')
-    op.drop_table('users')
-
-    op.create_table(
+    # ── 1. Convert `users.id` to UUID without deleting user data ────────────
+    # PostgreSQL has no meaningful INTEGER → UUID cast. A temporary column
+    # gives every existing row a UUID before the old primary key is removed.
+    op.add_column(
         'users',
-        sa.Column('id', sa.Uuid(), nullable=False),
-        sa.Column('email', sa.String(length=255), nullable=False),
-        sa.Column('full_name', sa.String(length=255), nullable=True),
-        sa.Column('hashed_password', sa.String(length=255), nullable=False),
-        sa.Column('is_active', sa.Boolean(), nullable=False, server_default=sa.text('true')),
         sa.Column(
-            'created_at',
-            sa.DateTime(timezone=True),
-            server_default=sa.text('now()'),
-            nullable=False,
+            'id_uuid',
+            sa.Uuid(),
+            nullable=True,
+            server_default=sa.text('gen_random_uuid()'),
         ),
-        sa.PrimaryKeyConstraint('id'),
     )
-    op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
+    op.execute('UPDATE users SET id_uuid = gen_random_uuid() WHERE id_uuid IS NULL;')
+    op.drop_constraint('users_pkey', 'users', type_='primary')
+    op.drop_column('users', 'id')
+    op.alter_column(
+        'users',
+        'id_uuid',
+        new_column_name='id',
+        existing_type=sa.Uuid(),
+        nullable=False,
+    )
+    op.execute('ALTER TABLE users ALTER COLUMN id DROP DEFAULT;')
+    op.create_primary_key('users_pkey', 'users', ['id'])
+    op.add_column(
+        'users',
+        sa.Column(
+            'is_active',
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text('true'),
+        ),
+    )
 
     # ── 2. Create Module A tables ───────────────────────────────────────────
     op.create_table(
@@ -201,24 +211,31 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_organizations_user_id'), table_name='organizations')
     op.drop_table('organizations')
 
-    # Restore users table with INTEGER PK (initial state)
-    op.drop_index('ix_users_email', table_name='users')
-    op.drop_table('users')
-
-    op.create_table(
-        'users',
-        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column('email', sa.String(length=255), nullable=False),
-        sa.Column('full_name', sa.String(length=255), nullable=True),
-        sa.Column('hashed_password', sa.String(length=255), nullable=False),
-        sa.Column(
-            'created_at',
-            sa.DateTime(timezone=True),
-            server_default=sa.text('now()'),
-            nullable=False,
-        ),
-        sa.PrimaryKeyConstraint('id'),
+    # Restore the original INTEGER primary-key shape without deleting users.
+    # UUID values cannot be converted back to their historical integers, so
+    # downgrade assigns stable replacement integers while preserving all
+    # account data.
+    op.drop_column('users', 'is_active')
+    op.execute('CREATE SEQUENCE users_id_seq;')
+    op.add_column('users', sa.Column('id_integer', sa.Integer(), nullable=True))
+    op.execute(
+        "UPDATE users SET id_integer = nextval('users_id_seq') "
+        "WHERE id_integer IS NULL;"
     )
-    op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
+    op.drop_constraint('users_pkey', 'users', type_='primary')
+    op.drop_column('users', 'id')
+    op.alter_column(
+        'users',
+        'id_integer',
+        new_column_name='id',
+        existing_type=sa.Integer(),
+        nullable=False,
+    )
+    op.execute(
+        "ALTER TABLE users ALTER COLUMN id "
+        "SET DEFAULT nextval('users_id_seq');"
+    )
+    op.execute('ALTER SEQUENCE users_id_seq OWNED BY users.id;')
+    op.create_primary_key('users_pkey', 'users', ['id'])
 
     op.execute('DROP TYPE IF EXISTS stock_status_enum;')

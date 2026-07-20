@@ -57,6 +57,10 @@ celery_app.conf.update(
     # If the worker dies mid-task the broker will re-queue it.
     task_acks_late=True,
     task_reject_on_worker_lost=True,
+    task_track_started=True,
+    task_send_sent_event=True,
+    broker_connection_retry_on_startup=True,
+    broker_transport_options={"visibility_timeout": 300},
 
     # Result TTL: keep task results in Redis for 24h for debugging.
     result_expires=86_400,

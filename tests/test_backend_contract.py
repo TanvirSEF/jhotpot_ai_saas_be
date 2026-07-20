@@ -39,6 +39,7 @@ class BackendContractTests(unittest.TestCase):
         extension_position = migration.index("CREATE EXTENSION IF NOT EXISTS vector")
         vector_table_position = migration.index("'knowledge_embeddings'")
         self.assertLess(extension_position, vector_table_position)
+        self.assertNotIn("op.drop_table('users')", migration)
 
     def test_alembic_metadata_imports_every_model(self):
         source = (ROOT / "migrations" / "env.py").read_text(encoding="utf-8")
@@ -58,6 +59,7 @@ class BackendContractTests(unittest.TestCase):
                 "Organization",
                 "Product",
                 "Resume",
+                "TaskFailure",
                 "User",
             },
         )

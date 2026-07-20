@@ -21,6 +21,7 @@ Design decisions:
 import logging
 import uuid
 
+import openai
 from openai import AsyncOpenAI
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -161,9 +162,11 @@ async def generate_reply(
 
     Returns:
         The model's reply string, stripped of leading/trailing whitespace.
-        Falls back to _FALLBACK_REPLY if the response is empty or on error.
+        Falls back for an empty or permanently rejected provider response.
+        Transient provider failures propagate to Celery for bounded retry.
     """
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    # Celery owns retry/backoff for this pipeline.
+    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, max_retries=0, timeout=45.0)
 
     logger.info(
         "LLM call: model=%s customer_msg_len=%d",
@@ -191,9 +194,12 @@ async def generate_reply(
         logger.info("LLM reply generated (%d chars).", len(reply))
         return reply
 
-    except Exception as exc:
-        logger.error("LLM generation failed: %s", exc, exc_info=True)
-        # Never leave the customer with no response — use the fallback
+    except (openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError):
+        raise
+    except openai.APIStatusError as exc:
+        if exc.status_code in {408, 409, 425, 429} or exc.status_code >= 500:
+            raise
+        logger.warning("LLM request was permanently rejected; using fallback.")
         return _FALLBACK_REPLY
 
 

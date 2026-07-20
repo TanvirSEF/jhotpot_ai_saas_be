@@ -16,6 +16,7 @@ class StartupConfigurationTests(unittest.TestCase):
             "OPENAI_API_KEY": "configured-test-key",
             "META_APP_ID": "configured-app-id",
             "META_APP_SECRET": "configured-app-secret",
+            "META_VERIFY_TOKEN": "configured-private-verify-token",
             "ENVIRONMENT": "test",
             "BACKEND_URL": "http://localhost:8000",
             "FRONTEND_URL": "http://localhost:3000",

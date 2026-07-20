@@ -23,12 +23,10 @@ async def get_current_user(
     )
     try:
         payload = decode_token(token)
-        user_id_str: str = payload.get("sub")
-        if user_id_str is None:
-            raise credentials_exception
+        user_id_str = payload["sub"]
         user_id = uuid.UUID(user_id_str)
-    except (jwt.PyJWTError, ValueError):
-        raise credentials_exception
+    except (jwt.PyJWTError, KeyError, TypeError, ValueError) as exc:
+        raise credentials_exception from exc
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -36,6 +34,8 @@ async def get_current_user(
         raise credentials_exception
     if not user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
         )
     return user

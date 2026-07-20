@@ -88,6 +88,36 @@ alembic history
 python -m unittest discover -s tests -v
 ```
 
+### Migration integration test
+
+The migration lifecycle test intentionally upgrades and downgrades a disposable
+database. Its safety guard only permits the local test database exposed on port
+`55432`; it refuses any other target.
+
+On a machine with Docker Desktop:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\test_migrations.ps1
+```
+
+The same lifecycle test runs automatically in the backend integration CI job. It
+verifies a fresh upgrade, preservation of an existing user during the integer to
+UUID conversion, downgrade/re-upgrade behavior, and `alembic check` model drift.
+The disposable stack also runs Redis security-control and PostgreSQL tenant-
+isolation tests.
+
+## Authentication security
+
+Access tokens include and validate issuer, audience, issue time, not-before,
+expiry, token type, subject, and unique token ID claims. Tokens issued before
+this claim contract was introduced are intentionally invalid; users must log in
+again after deployment.
+
+Login and registration use independent per-IP and per-account Redis limits. If
+Redis cannot make the security decision, authentication fails closed with HTTP
+503 instead of silently disabling brute-force protection. Meta OAuth state is
+also registered in Redis and consumed atomically, preventing callback replay.
+
 ## PDF support
 
 WeasyPrint requires native operating-system libraries. When those libraries are

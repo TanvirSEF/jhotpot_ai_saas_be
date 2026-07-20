@@ -18,11 +18,16 @@ class Settings(BaseSettings):
     )
 
     SECRET_KEY: str = "change-me"
-    ALGORITHM: str = "HS256"
+    ALGORITHM: Literal["HS256"] = "HS256"
+    JWT_ISSUER: str = "nexussuite-api"
+    JWT_AUDIENCE: str = "nexussuite-clients"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
     # Redis (broker + backend for Celery)
     REDIS_URL: str = "redis://localhost:6379/0"
+    AUTH_RATE_LIMIT_IP_REQUESTS: int = 30
+    AUTH_RATE_LIMIT_ACCOUNT_REQUESTS: int = 10
+    AUTH_RATE_LIMIT_WINDOW_SECONDS: int = 60
 
     # Fernet key for AES encryption of Meta Page Access Tokens (PRD §6.2)
     # Generate with a short Python command using cryptography.fernet.Fernet.

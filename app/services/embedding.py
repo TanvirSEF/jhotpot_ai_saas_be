@@ -26,7 +26,9 @@ _DIMENSIONS = 1536
 @lru_cache(maxsize=1)
 def _get_client() -> AsyncOpenAI:
     """Return a lazily constructed, module-level async OpenAI client."""
-    return AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    # Celery owns the retry schedule; disabling SDK retries avoids multiplying
+    # attempts across two independent retry layers.
+    return AsyncOpenAI(api_key=settings.OPENAI_API_KEY, max_retries=0, timeout=30.0)
 
 
 async def get_embedding(text: str) -> list[float]:

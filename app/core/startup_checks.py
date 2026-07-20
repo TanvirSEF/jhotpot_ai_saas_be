@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 _PLACEHOLDER_SECRETS = {"change-me", "", "secret", "changeme"}
 _PLACEHOLDER_OPENAI  = {"", "sk-your-openai-api-key-here", "your-openai-api-key"}
 _PLACEHOLDER_META    = {"", "your-meta-app-id", "your-meta-app-secret"}
+_PLACEHOLDER_META_VERIFY = {
+    "",
+    "nexussuite-verify",
+    "replace-with-a-private-webhook-verify-token",
+}
 _POSTGRESQL_ASYNC_PREFIX = "postgresql+asyncpg://"
 
 
@@ -65,6 +70,15 @@ def validate_configuration() -> None:
         )
     elif len(settings.SECRET_KEY) < 32:
         critical.append("SECRET_KEY must be at least 32 characters long.")
+
+    if settings.ALGORITHM != "HS256":
+        critical.append("ALGORITHM must be HS256.")
+    if not settings.JWT_ISSUER.strip():
+        critical.append("JWT_ISSUER cannot be empty.")
+    if not settings.JWT_AUDIENCE.strip():
+        critical.append("JWT_AUDIENCE cannot be empty.")
+    if settings.ACCESS_TOKEN_EXPIRE_MINUTES <= 0:
+        critical.append("ACCESS_TOKEN_EXPIRE_MINUTES must be greater than zero.")
 
     # ── 3. FERNET_KEY ─────────────────────────────────────────────────────────
     if settings.FERNET_KEY.lower() in _PLACEHOLDER_SECRETS:
@@ -102,6 +116,14 @@ def validate_configuration() -> None:
             "Required for HMAC webhook signature verification (Phase A3)."
         )
 
+    if (
+        settings.META_VERIFY_TOKEN in _PLACEHOLDER_META_VERIFY
+        or len(settings.META_VERIFY_TOKEN) < 16
+    ):
+        critical.append(
+            "META_VERIFY_TOKEN must be a private value of at least 16 characters."
+        )
+
     # ── 6. Environment-specific URL and CORS policy ───────────────────────────
     if settings.BACKEND_CORS_ORIGINS == ["*"]:
         message = (
@@ -118,6 +140,17 @@ def validate_configuration() -> None:
             critical.append("BACKEND_URL must use HTTPS in staging and production.")
         if not settings.FRONTEND_URL.startswith("https://"):
             critical.append("FRONTEND_URL must use HTTPS in staging and production.")
+
+    rate_limit_values = {
+        "AUTH_RATE_LIMIT_IP_REQUESTS": settings.AUTH_RATE_LIMIT_IP_REQUESTS,
+        "AUTH_RATE_LIMIT_ACCOUNT_REQUESTS": (
+            settings.AUTH_RATE_LIMIT_ACCOUNT_REQUESTS
+        ),
+        "AUTH_RATE_LIMIT_WINDOW_SECONDS": settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
+    }
+    for name, value in rate_limit_values.items():
+        if value <= 0:
+            critical.append(f"{name} must be greater than zero.")
 
     # ── Report ────────────────────────────────────────────────────────────────
     for warning in warnings:

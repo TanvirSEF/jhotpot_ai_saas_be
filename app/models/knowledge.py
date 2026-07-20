@@ -25,6 +25,13 @@ class KnowledgeEmbedding(Base):
 
     __table_args__ = (
         Index("ix_knowledge_embeddings_org_entity", "org_id", "entity_type"),
+        Index(
+            "ix_knowledge_embeddings_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+            postgresql_with={"m": 16, "ef_construction": 64},
+        ),
         UniqueConstraint(
             "org_id",
             "entity_type",

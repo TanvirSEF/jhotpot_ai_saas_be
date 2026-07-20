@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,7 @@ from app.core.deps import get_current_user
 from app.db.session import get_db
 from app.models import KnowledgeEmbedding, Organization, User
 from app.worker.tasks import generate_embeddings
+from app.worker.reliability import correlation_headers
 
 router = APIRouter(prefix="/org", tags=["organization"])
 
@@ -37,6 +38,7 @@ class OrgOut(BaseModel):
 @router.post("", response_model=OrgOut, status_code=status.HTTP_201_CREATED)
 async def create_org(
     org_in: OrgCreate,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -49,7 +51,10 @@ async def create_org(
     await db.commit()
     await db.refresh(org)
     if org.global_guidelines and org.global_guidelines.strip():
-        generate_embeddings.delay("guideline", str(org.id))
+        generate_embeddings.apply_async(
+            args=("guideline", str(org.id)),
+            headers=correlation_headers(request),
+        )
     return org
 
 
@@ -87,6 +92,7 @@ async def get_org(
 async def update_org(
     org_id: uuid.UUID,
     org_in: OrgUpdate,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -106,7 +112,7 @@ async def update_org(
     for field, value in update_data.items():
         setattr(org, field, value)
 
-    if guidelines_changed:
+    if guidelines_changed and not (org.global_guidelines or "").strip():
         await db.execute(
             delete(KnowledgeEmbedding).where(
                 KnowledgeEmbedding.org_id == org.id,
@@ -118,7 +124,10 @@ async def update_org(
     await db.commit()
     await db.refresh(org)
     if guidelines_changed and org.global_guidelines and org.global_guidelines.strip():
-        generate_embeddings.delay("guideline", str(org.id))
+        generate_embeddings.apply_async(
+            args=("guideline", str(org.id)),
+            headers=correlation_headers(request),
+        )
     return org
 
 

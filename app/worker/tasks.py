@@ -15,31 +15,12 @@ Task registry:
 import asyncio
 import logging
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from app.core.config import settings
 from app.worker.celery_app import celery_app
+from app.worker.db import task_db_session as _task_db_session
+from app.worker.reliability import PermanentTaskError, request_id_from_task, retry_or_fail
 
 logger = logging.getLogger(__name__)
-
-
-@asynccontextmanager
-async def _task_db_session() -> AsyncIterator[AsyncSession]:
-    """Create an isolated task session and always release its connection pool."""
-    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
-    session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
-    try:
-        async with session_factory() as session:
-            yield session
-    finally:
-        await engine.dispose()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -52,6 +33,8 @@ async def _task_db_session() -> AsyncIterator[AsyncSession]:
     max_retries=3,
     default_retry_delay=10,
     acks_late=True,
+    soft_time_limit=45,
+    time_limit=60,
 )
 def generate_embeddings(self, entity_type: str, entity_id: str) -> dict:
     """
@@ -69,20 +52,18 @@ def generate_embeddings(self, entity_type: str, entity_id: str) -> dict:
         result = asyncio.run(_run_embedding(entity_type, entity_id))
         return result
     except Exception as exc:
-        logger.error(
-            "generate_embeddings failed [%s:%s]: %s",
-            entity_type, entity_id, exc,
-            exc_info=True,
+        retry_or_fail(
+            self,
+            exc,
+            base_delay=10,
+            safe_context={"entity_type": entity_type, "entity_id": entity_id},
         )
-        # Exponential backoff: 10s → 20s → 40s
-        # Prevents hammering OpenAI API during rate-limit windows
-        backoff = 10 * (2 ** self.request.retries)
-        raise self.retry(exc=exc, countdown=backoff)
 
 
 async def _run_embedding(entity_type: str, entity_id: str) -> dict:
     """Async implementation called from the sync Celery task wrapper."""
-    from sqlalchemy import select, delete
+    from sqlalchemy import delete, func, select
+    from sqlalchemy.dialects.postgresql import insert
 
     from app.models import Faq, KnowledgeEmbedding, Organization, Product
     from app.services.embedding import (
@@ -158,32 +139,32 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
             metadata = {"business_name": entity.business_name}
 
         else:
-            logger.error("Unknown entity_type: %s", entity_type)
-            return {"status": "error", "reason": f"unknown entity_type: {entity_type}"}
+            raise PermanentTaskError("Unsupported embedding entity type.")
 
         # ── 2. Generate embedding ────────────────────────────────────────────
         logger.info("Generating embedding [%s:%s] text_len=%d", entity_type, entity_id, len(text))
         vector = await get_embedding(text)
 
-        # ── 3. Remove stale embedding (idempotent upsert pattern) ────────────
-        await db.execute(
-            delete(KnowledgeEmbedding).where(
-                KnowledgeEmbedding.org_id == org_id,
-                KnowledgeEmbedding.entity_type == entity_type,
-                KnowledgeEmbedding.entity_id == entity_uuid,
-            )
-        )
-
-        # ── 4. Insert fresh embedding ────────────────────────────────────────
-        embedding_row = KnowledgeEmbedding(
+        # One statement preserves the old vector until the replacement commits.
+        statement = insert(KnowledgeEmbedding).values(
+            id=uuid.uuid4(),
             org_id=org_id,
             content=text,
             embedding=vector,
             entity_type=entity_type,
             entity_id=entity_uuid,
-            metadata_=metadata,
+            metadata=metadata,
         )
-        db.add(embedding_row)
+        statement = statement.on_conflict_do_update(
+            constraint="uq_knowledge_embeddings_entity",
+            set_={
+                "content": statement.excluded.content,
+                "embedding": statement.excluded.embedding,
+                "metadata": statement.excluded.metadata,
+                "created_at": func.now(),
+            },
+        )
+        await db.execute(statement)
         await db.commit()
 
         logger.info(
@@ -210,6 +191,8 @@ _TWENTY_FOUR_HOURS_S = 86_400   # Meta standard messaging window (seconds)
     max_retries=3,
     default_retry_delay=5,
     acks_late=True,
+    soft_time_limit=60,
+    time_limit=75,
 )
 def process_fb_webhook(self, event_dict: dict) -> dict:
     """
@@ -238,18 +221,25 @@ def process_fb_webhook(self, event_dict: dict) -> dict:
         Status dict stored in Celery result backend.
     """
     try:
+        logger.info(
+            "Webhook task started task_id=%s request_id=%s type=%s page_id=%s",
+            self.request.id,
+            request_id_from_task(self),
+            event_dict.get("type"),
+            event_dict.get("page_id"),
+        )
         result = asyncio.run(_run_webhook_pipeline(event_dict))
         return result
     except Exception as exc:
-        logger.error(
-            "process_fb_webhook failed [type=%s]: %s",
-            event_dict.get("type"), exc,
-            exc_info=True,
+        retry_or_fail(
+            self,
+            exc,
+            base_delay=5,
+            safe_context={
+                "event_type": str(event_dict.get("type", ""))[:50],
+                "page_id": str(event_dict.get("page_id", ""))[:255],
+            },
         )
-        # Exponential backoff: 5s → 10s → 20s
-        # Prevents hammering Meta Graph API during transient failures
-        backoff = 5 * (2 ** self.request.retries)
-        raise self.retry(exc=exc, countdown=backoff)
 
 
 async def _run_webhook_pipeline(event_dict: dict) -> dict:
@@ -296,8 +286,8 @@ async def _run_webhook_pipeline(event_dict: dict) -> dict:
         try:
             plain_token = decrypt_token(fb_page.encrypted_access_token)
         except Exception as exc:
-            logger.error("Token decryption failed for page=%s: %s", page_id, exc)
-            return {"status": "error", "reason": "token_decryption_failed"}
+            logger.error("Token decryption failed for page=%s", page_id)
+            raise PermanentTaskError("Stored Page token could not be decrypted.") from exc
 
         # ── 5. Fetch org business name + guidelines ───────────────────────────
         org_result = await db.execute(
@@ -306,8 +296,7 @@ async def _run_webhook_pipeline(event_dict: dict) -> dict:
         org = org_result.scalar_one_or_none()
 
         if not org:
-            logger.error("Organisation not found for org_id=%s", fb_page.org_id)
-            return {"status": "error", "reason": "org_not_found"}
+            raise PermanentTaskError("Page organization does not exist.")
 
         business_name = org.business_name
         guidelines = org.global_guidelines
@@ -342,15 +331,15 @@ async def _run_webhook_pipeline(event_dict: dict) -> dict:
         # ── 10. Send reply via Meta Graph API ────────────────────────────────
         if event_type == "MessengerEvent":
             sender_psid = event_dict.get("sender_id", "")
-            success = await send_messenger_reply(plain_token, sender_psid, ai_reply)
+            await send_messenger_reply(plain_token, sender_psid, ai_reply)
             reply_target = f"messenger:{sender_psid}"
 
         else:  # CommentEvent
             comment_id = event_dict.get("comment_id", "")
-            success = await post_comment_reply(plain_token, comment_id, ai_reply)
+            await post_comment_reply(plain_token, comment_id, ai_reply)
             reply_target = f"comment:{comment_id}"
 
-        status = "ok" if success else "reply_failed"
+        status = "ok"
         logger.info(
             "RAG pipeline complete [%s] page=%s target=%s status=%s",
             event_type, page_id, reply_target, status,
@@ -375,6 +364,8 @@ async def _run_webhook_pipeline(event_dict: dict) -> dict:
     max_retries=2,
     default_retry_delay=15,
     acks_late=True,
+    soft_time_limit=90,
+    time_limit=120,
 )
 def export_resume_pdf(self, resume_id: str) -> dict:
     """
@@ -385,8 +376,12 @@ def export_resume_pdf(self, resume_id: str) -> dict:
         result = asyncio.run(_run_export_resume_pdf(resume_id))
         return result
     except Exception as exc:
-        logger.error("export_resume_pdf failed [%s]: %s", resume_id, exc, exc_info=True)
-        raise self.retry(exc=exc)
+        retry_or_fail(
+            self,
+            exc,
+            base_delay=15,
+            safe_context={"resume_id": resume_id},
+        )
 
 
 async def _run_export_resume_pdf(resume_id: str) -> dict:
@@ -403,7 +398,7 @@ async def _run_export_resume_pdf(resume_id: str) -> dict:
 
         if not resume:
             logger.warning("Resume %s not found for PDF compilation.", resume_id)
-            return {"status": "error", "reason": "resume_not_found"}
+            raise PermanentTaskError("Resume does not exist.")
 
         data = resume.optimized_json_data or resume.raw_json_data
         pdf_bytes = generate_resume_pdf(data)

@@ -31,6 +31,7 @@ from app.models import (  # noqa: F401
     Organization,
     Product,
     Resume,
+    TaskFailure,
     User,
 )
 

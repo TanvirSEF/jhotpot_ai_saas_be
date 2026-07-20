@@ -42,6 +42,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.deps import get_current_user
 from app.core.security import decrypt_token, encrypt_token
+from app.core.security_store import (
+    SecurityStoreUnavailable,
+    consume_oauth_state,
+    register_oauth_state,
+)
 from app.db.session import get_db
 from app.models import FbPage, Organization, User
 from app.services.meta import (
@@ -62,27 +67,59 @@ _STATE_EXPIRE_MINUTES = 10
 _STATE_ALGORITHM = "HS256"
 
 
-def _create_state_token(org_id: uuid.UUID, user_id: uuid.UUID) -> str:
-    """Create a short-lived JWT used as the OAuth `state` parameter."""
-    exp = datetime.now(timezone.utc) + timedelta(minutes=_STATE_EXPIRE_MINUTES)
+def _create_state_token(org_id: uuid.UUID, user_id: uuid.UUID) -> tuple[str, str]:
+    """Create a signed OAuth state and return it with its one-time identifier."""
+    now = datetime.now(timezone.utc)
+    exp = now + timedelta(minutes=_STATE_EXPIRE_MINUTES)
+    state_id = str(uuid.uuid4())
     payload = {
         "org_id": str(org_id),
         "user_id": str(user_id),
+        "iat": now,
+        "nbf": now,
         "exp": exp,
+        "iss": settings.JWT_ISSUER,
+        "aud": f"{settings.JWT_AUDIENCE}:meta-oauth",
+        "jti": state_id,
+        "token_type": "oauth_state",
     }
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=_STATE_ALGORITHM)
+    token = jwt.encode(payload, settings.SECRET_KEY, algorithm=_STATE_ALGORITHM)
+    return token, state_id
 
 
-def _decode_state_token(state: str) -> tuple[uuid.UUID, uuid.UUID]:
+def _decode_state_token(state: str) -> tuple[uuid.UUID, uuid.UUID, str]:
     """
     Decode and verify the OAuth state JWT.
-    Returns (org_id, user_id) or raises HTTPException on any failure.
+    Returns (org_id, user_id, state_id) or raises HTTPException on failure.
     """
     try:
         payload = jwt.decode(
-            state, settings.SECRET_KEY, algorithms=[_STATE_ALGORITHM]
+            state,
+            settings.SECRET_KEY,
+            algorithms=[_STATE_ALGORITHM],
+            audience=f"{settings.JWT_AUDIENCE}:meta-oauth",
+            issuer=settings.JWT_ISSUER,
+            options={
+                "require": [
+                    "org_id",
+                    "user_id",
+                    "iat",
+                    "nbf",
+                    "exp",
+                    "iss",
+                    "aud",
+                    "jti",
+                    "token_type",
+                ]
+            },
         )
-        return uuid.UUID(payload["org_id"]), uuid.UUID(payload["user_id"])
+        if payload.get("token_type") != "oauth_state":
+            raise jwt.InvalidTokenError("Token is not an OAuth state")
+        return (
+            uuid.UUID(payload["org_id"]),
+            uuid.UUID(payload["user_id"]),
+            payload["jti"],
+        )
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -171,7 +208,17 @@ async def connect_facebook_page(
     if not result.scalar_one_or_none():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Organization not found.")
 
-    state = _create_state_token(org_id, current_user.id)
+    state, state_id = _create_state_token(org_id, current_user.id)
+    try:
+        await register_oauth_state(
+            state_id,
+            ttl_seconds=_STATE_EXPIRE_MINUTES * 60,
+        )
+    except SecurityStoreUnavailable as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Facebook connection is temporarily unavailable.",
+        ) from exc
     oauth_url = build_oauth_url(state)
 
     logger.info(
@@ -203,7 +250,19 @@ async def facebook_oauth_callback(
     CSRF protection is handled by the signed `state` parameter.
     """
     # ── 1. Verify state ───────────────────────────────────────────────────────
-    org_id, user_id = _decode_state_token(state)
+    org_id, user_id, state_id = _decode_state_token(state)
+    try:
+        state_is_valid = await consume_oauth_state(state_id)
+    except SecurityStoreUnavailable as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Facebook connection is temporarily unavailable.",
+        ) from exc
+    if not state_is_valid:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "OAuth state has already been used or is no longer valid.",
+        )
 
     # ── 2. Verify org still exists and belongs to user ────────────────────────
     result = await db.execute(
@@ -510,7 +569,10 @@ async def webhook_ingest(request: Request) -> dict:
         }
         # Remove non-serialisable raw field from Celery payload
         event_dict.pop("raw", None)
-        process_fb_webhook.delay(event_dict)
+        process_fb_webhook.apply_async(
+            args=(event_dict,),
+            headers={"request_id": str(request.state.request_id)[:255]},
+        )
         dispatched += 1
 
     logger.info(

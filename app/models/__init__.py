@@ -5,6 +5,7 @@ from app.models.product import Product, StockStatus
 from app.models.faq import Faq
 from app.models.knowledge import KnowledgeEmbedding
 from app.models.resume import Resume
+from app.models.task_failure import TaskFailure
 
 __all__ = [
     "User",
@@ -15,4 +16,5 @@ __all__ = [
     "Faq",
     "KnowledgeEmbedding",
     "Resume",
+    "TaskFailure",
 ]

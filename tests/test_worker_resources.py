@@ -21,9 +21,9 @@ class WorkerResourceTests(unittest.IsolatedAsyncioTestCase):
         session = object()
 
         with (
-            patch("app.worker.tasks.create_async_engine", return_value=engine),
+            patch("app.worker.db.create_async_engine", return_value=engine),
             patch(
-                "app.worker.tasks.async_sessionmaker",
+                "app.worker.db.async_sessionmaker",
                 return_value=lambda: _SessionContext(session),
             ),
         ):
@@ -36,9 +36,9 @@ class WorkerResourceTests(unittest.IsolatedAsyncioTestCase):
         engine = type("Engine", (), {"dispose": AsyncMock()})()
 
         with (
-            patch("app.worker.tasks.create_async_engine", return_value=engine),
+            patch("app.worker.db.create_async_engine", return_value=engine),
             patch(
-                "app.worker.tasks.async_sessionmaker",
+                "app.worker.db.async_sessionmaker",
                 return_value=lambda: _SessionContext(object()),
             ),
         ):

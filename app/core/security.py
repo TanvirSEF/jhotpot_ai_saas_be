@@ -1,6 +1,7 @@
 """Security utilities including password hashing, JWTs, and Fernet token encryption."""
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 import bcrypt
 import jwt
@@ -10,6 +11,11 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 PASSWORD_MIN_LENGTH = 10
 _BCRYPT_MAX_BYTES = 72
+# Used only to equalize login work when an email does not exist. It is not a
+# credential and does not grant access to any account.
+DUMMY_PASSWORD_HASH = (
+    "$2b$12$lreigrcUjPDfvQue1Rw8xufZkePYD4tQULEBLi.d2MuxKGGJ8bmhe"
+)
 _fernet: Fernet | None = None
 
 
@@ -51,15 +57,46 @@ def validate_password(password: str) -> None:
 
 
 def create_access_token(sub: str, expires_in: timedelta | None = None) -> str:
-    exp = datetime.now(timezone.utc) + (
+    now = datetime.now(timezone.utc)
+    exp = now + (
         expires_in or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    payload = {"exp": exp, "sub": sub}
+    payload = {
+        "sub": sub,
+        "iat": now,
+        "nbf": now,
+        "exp": exp,
+        "iss": settings.JWT_ISSUER,
+        "aud": settings.JWT_AUDIENCE,
+        "jti": str(uuid.uuid4()),
+        "token_type": "access",
+    }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
 def decode_token(token: str) -> dict:
-    return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    payload = jwt.decode(
+        token,
+        settings.SECRET_KEY,
+        algorithms=[settings.ALGORITHM],
+        audience=settings.JWT_AUDIENCE,
+        issuer=settings.JWT_ISSUER,
+        options={
+            "require": [
+                "sub",
+                "iat",
+                "nbf",
+                "exp",
+                "iss",
+                "aud",
+                "jti",
+                "token_type",
+            ]
+        },
+    )
+    if payload.get("token_type") != "access":
+        raise jwt.InvalidTokenError("Token is not an access token")
+    return payload
 
 
 def encrypt_token(plain_text: str) -> str:

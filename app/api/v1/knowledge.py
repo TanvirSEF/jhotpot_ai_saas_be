@@ -26,8 +26,8 @@ Design notes:
   * All mutating endpoints verify org ownership via `_get_owned_org()`.
   * Embedding generation is always queued as a Celery background task so the
     HTTP response is never delayed by OpenAI round-trips.
-  * Existing embeddings for an entity are deleted before re-embedding to
-    prevent stale duplicate vectors.
+  * Re-embedding uses an atomic database upsert, so the last valid vector
+    remains searchable until its replacement is ready.
   * Pagination on list endpoints uses limit/offset for simplicity; can be
     migrated to cursor-based later.
 """
@@ -36,7 +36,7 @@ import uuid
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +45,7 @@ from app.core.deps import get_current_user
 from app.db.session import get_db
 from app.models import Faq, KnowledgeEmbedding, Organization, Product, StockStatus, User
 from app.worker.tasks import generate_embeddings
+from app.worker.reliability import correlation_headers
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
@@ -130,6 +131,7 @@ class ProductOut(BaseModel):
 async def create_product(
     org_id: uuid.UUID,
     body: ProductCreate,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ProductOut:
@@ -150,7 +152,10 @@ async def create_product(
     await db.refresh(product)
 
     # Queue background embedding generation
-    generate_embeddings.delay("product", str(product.id))
+    generate_embeddings.apply_async(
+        args=("product", str(product.id)),
+        headers=correlation_headers(request),
+    )
 
     return product
 
@@ -198,6 +203,7 @@ async def update_product(
     org_id: uuid.UUID,
     product_id: uuid.UUID,
     body: ProductUpdate,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ProductOut:
@@ -218,10 +224,11 @@ async def update_product(
     await db.commit()
     await db.refresh(product)
 
-    # Purge stale vectors then re-generate
-    await _delete_entity_embeddings(db, org_id, "product", product_id)
-    await db.commit()
-    generate_embeddings.delay("product", str(product.id))
+    # Keep the current vector searchable until the atomic upsert replaces it.
+    generate_embeddings.apply_async(
+        args=("product", str(product.id)),
+        headers=correlation_headers(request),
+    )
 
     return product
 
@@ -283,6 +290,7 @@ class FaqOut(BaseModel):
 async def create_faq(
     org_id: uuid.UUID,
     body: FaqCreate,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FaqOut:
@@ -293,7 +301,10 @@ async def create_faq(
     await db.commit()
     await db.refresh(faq)
 
-    generate_embeddings.delay("faq", str(faq.id))
+    generate_embeddings.apply_async(
+        args=("faq", str(faq.id)),
+        headers=correlation_headers(request),
+    )
     return faq
 
 
@@ -334,6 +345,7 @@ async def update_faq(
     org_id: uuid.UUID,
     faq_id: uuid.UUID,
     body: FaqUpdate,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FaqOut:
@@ -353,9 +365,11 @@ async def update_faq(
     await db.commit()
     await db.refresh(faq)
 
-    await _delete_entity_embeddings(db, org_id, "faq", faq_id)
-    await db.commit()
-    generate_embeddings.delay("faq", str(faq.id))
+    # Keep the current vector searchable until the atomic upsert replaces it.
+    generate_embeddings.apply_async(
+        args=("faq", str(faq.id)),
+        headers=correlation_headers(request),
+    )
 
     return faq
 

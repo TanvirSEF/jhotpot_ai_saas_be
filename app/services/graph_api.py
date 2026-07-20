@@ -17,17 +17,44 @@ Design decisions:
     returns a 200 Messenger Error code 10 — handled by _raise_for_reply_error.
   - The raw Page Access Token is passed in from the Celery layer after
     Fernet decryption. This module never touches the database.
-  - Errors are logged but not re-raised: a failed reply should not cause
-    the Celery task to retry with the same stale payload.
+  - Transient errors are raised with an explicit retry contract; permanent
+    Graph errors fail immediately and are captured by the worker audit trail.
 """
 
 import logging
 
 import httpx
 
-from app.services.meta import GRAPH_BASE, _raise_for_meta_error
+from app.services.meta import GRAPH_BASE
 
 logger = logging.getLogger(__name__)
+
+_TRANSIENT_META_CODES = {1, 2, 4, 17, 32, 341, 613}
+
+
+class GraphAPIError(RuntimeError):
+    """Sanitized Meta reply error with an explicit retry contract."""
+
+    def __init__(self, *, retryable: bool, code: int | None = None) -> None:
+        self.retryable = retryable
+        self.code = code
+        super().__init__("Meta Graph API reply failed.")
+
+
+def _raise_for_reply_error(response: httpx.Response) -> None:
+    try:
+        data = response.json()
+    except ValueError:
+        response.raise_for_status()
+        return
+
+    error = data.get("error")
+    if error:
+        code = error.get("code")
+        retryable = bool(error.get("is_transient")) or code in _TRANSIENT_META_CODES
+        retryable = retryable or response.status_code == 429 or response.status_code >= 500
+        raise GraphAPIError(retryable=retryable, code=code)
+    response.raise_for_status()
 
 
 async def send_messenger_reply(
@@ -47,11 +74,10 @@ async def send_messenger_reply(
         message_text:      The AI-generated reply to send.
 
     Returns:
-        True on success, False on any Graph API error (error is logged).
+        True on success. Raises GraphAPIError or an httpx exception on failure.
     """
     if not message_text or not message_text.strip():
-        logger.warning("send_messenger_reply: empty message_text — skipping send.")
-        return False
+        raise GraphAPIError(retryable=False)
 
     payload = {
         "messaging_type": "RESPONSE",
@@ -59,29 +85,21 @@ async def send_messenger_reply(
         "message": {"text": message_text[:2000]},  # Meta hard limit: 2 000 chars
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(
-                f"{GRAPH_BASE}/me/messages",
-                params={"access_token": page_access_token},
-                json=payload,
-            )
-            _raise_for_meta_error(response, "send_messenger_reply")
-
-        data = response.json()
-        message_id = data.get("message_id", "unknown")
-        logger.info(
-            "Messenger reply sent → recipient=%s message_id=%s",
-            recipient_psid, message_id,
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(
+            f"{GRAPH_BASE}/me/messages",
+            params={"access_token": page_access_token},
+            json=payload,
         )
-        return True
+        _raise_for_reply_error(response)
 
-    except Exception as exc:
-        logger.error(
-            "Failed to send Messenger reply to %s: %s",
-            recipient_psid, exc, exc_info=True,
-        )
-        return False
+    data = response.json()
+    message_id = data.get("message_id", "unknown")
+    logger.info(
+        "Messenger reply sent → recipient=%s message_id=%s",
+        recipient_psid, message_id,
+    )
+    return True
 
 
 async def post_comment_reply(
@@ -103,32 +121,23 @@ async def post_comment_reply(
         message_text:      The AI-generated reply to post.
 
     Returns:
-        True on success, False on any Graph API error (error is logged).
+        True on success. Raises GraphAPIError or an httpx exception on failure.
     """
     if not message_text or not message_text.strip():
-        logger.warning("post_comment_reply: empty message_text — skipping send.")
-        return False
+        raise GraphAPIError(retryable=False)
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(
-                f"{GRAPH_BASE}/{comment_id}/comments",
-                params={"access_token": page_access_token},
-                json={"message": message_text[:8000]},  # generous limit for comments
-            )
-            _raise_for_meta_error(response, "post_comment_reply")
-
-        data = response.json()
-        new_comment_id = data.get("id", "unknown")
-        logger.info(
-            "Comment reply posted → parent_comment=%s new_comment=%s",
-            comment_id, new_comment_id,
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(
+            f"{GRAPH_BASE}/{comment_id}/comments",
+            params={"access_token": page_access_token},
+            json={"message": message_text[:8000]},  # generous limit for comments
         )
-        return True
+        _raise_for_reply_error(response)
 
-    except Exception as exc:
-        logger.error(
-            "Failed to post comment reply to %s: %s",
-            comment_id, exc, exc_info=True,
-        )
-        return False
+    data = response.json()
+    new_comment_id = data.get("id", "unknown")
+    logger.info(
+        "Comment reply posted → parent_comment=%s new_comment=%s",
+        comment_id, new_comment_id,
+    )
+    return True

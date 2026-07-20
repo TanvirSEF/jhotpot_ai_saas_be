@@ -55,6 +55,10 @@ class KnowledgeContractTests(unittest.TestCase):
         }
         self.assertIn("uq_knowledge_embeddings_entity", constraint_names)
 
+    def test_embedding_model_tracks_the_hnsw_index(self):
+        index_names = {index.name for index in KnowledgeEmbedding.__table__.indexes}
+        self.assertIn("ix_knowledge_embeddings_embedding_hnsw", index_names)
+
 
 if __name__ == "__main__":
     unittest.main()
