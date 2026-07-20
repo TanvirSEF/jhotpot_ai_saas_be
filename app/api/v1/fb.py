@@ -1,33 +1,39 @@
 """
-Facebook Integration API — Phase A2 (OAuth + Page Management)
+Facebook Integration API — Phase A2 + A3
 
-Endpoints:
+── Phase A2 (OAuth + Page Management) ─────────────────────────────────────────
   GET  /api/v1/fb/connect                  → Returns OAuth URL for frontend redirect
   GET  /api/v1/fb/callback                 → OAuth callback (public, called by Meta)
   GET  /api/v1/fb/pages                    → List connected pages for authenticated user
   GET  /api/v1/fb/pages/{page_id}          → Single page details
   PATCH /api/v1/fb/pages/{page_id}/toggle  → Toggle bot active/inactive
   DELETE /api/v1/fb/pages/{page_id}        → Disconnect (remove) page
+  GET  /api/v1/fb/pages/{page_id}/health   → Token validity & scope check
 
-OAuth CSRF Protection:
-  The `state` parameter is a short-lived JWT signed with SECRET_KEY.
-  Payload: {"org_id": "...", "user_id": "...", "exp": <unix timestamp>}
-  The callback verifies the JWT before processing — this prevents
-  CSRF attacks where a malicious redirect triggers page connection.
+── Phase A3 (Webhook Ingestion) ───────────────────────────────────────────────
+  GET  /api/v1/fb/webhook                  → Meta hub challenge verification (public)
+  POST /api/v1/fb/webhook                  → Webhook event ingestion (public)
 
-Token Storage:
-  Page Access Tokens are Fernet-encrypted before being written to
-  fb_pages.encrypted_access_token. The raw token never appears in
-  any API response or log entry.
+Security:
+  OAuth:    Short-lived JWT `state` parameter prevents CSRF on the callback.
+  Webhooks: HMAC-SHA256 signature verified against X-Hub-Signature-256 header
+            using META_APP_SECRET before any payload processing.
+  Tokens:   All Page Access Tokens are Fernet-encrypted at rest.
+
+Performance:
+  POST /webhook returns HTTP 200 in < 250 ms by immediately dispatching to
+  Celery and returning before any AI/DB heavy-lifting begins.
 """
 
+import hashlib
+import hmac
 import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -382,3 +388,136 @@ async def check_page_token_health(
         "expires_at": token_info.get("expires_at"),
         "scopes": token_info.get("scopes", []),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase A3 — Webhook Ingestion Endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/webhook")
+async def webhook_verify(
+    hub_mode: str = Query(alias="hub.mode", default=""),
+    hub_verify_token: str = Query(alias="hub.verify_token", default=""),
+    hub_challenge: str = Query(alias="hub.challenge", default=""),
+) -> int:
+    """
+    Meta Webhook Verification Handshake (Phase A3).
+
+    When a developer registers a webhook callback URL in the Meta App
+    Dashboard, Meta sends a GET request with these three query parameters
+    to confirm that the endpoint is live and owned by the app developer.
+
+    Flow:
+      1. Meta sends: hub.mode="subscribe", hub.verify_token=<our_secret>,
+                     hub.challenge=<random_int_string>
+      2. We verify hub.mode and hub.verify_token match our config.
+      3. We echo back hub.challenge as a plain integer → Meta confirms.
+      4. Any mismatch → 403 Forbidden (endpoint rejected).
+
+    This endpoint is PUBLIC (no JWT auth).
+    """
+    if hub_mode == "subscribe" and hub_verify_token == settings.META_VERIFY_TOKEN:
+        logger.info("Webhook verification handshake successful.")
+        # Meta expects the challenge echoed back as a plain integer
+        return int(hub_challenge)
+
+    logger.warning(
+        "Webhook verification FAILED — mode=%s token_match=%s",
+        hub_mode,
+        hub_verify_token == settings.META_VERIFY_TOKEN,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Webhook verification failed: invalid hub.verify_token.",
+    )
+
+
+@router.post("/webhook", status_code=status.HTTP_200_OK)
+async def webhook_ingest(request: Request) -> dict:
+    """
+    Meta Webhook Event Ingestion (Phase A3).
+
+    Design contract:
+      - Must return HTTP 200 within 20 s (we target < 250 ms).
+      - Any failure in AI processing must NOT delay this response.
+      - Meta retries if it receives non-200 or no response within the window.
+
+    Pipeline:
+      1. Read raw request body bytes (required for HMAC computation).
+      2. Verify X-Hub-Signature-256 header using HMAC-SHA256(APP_SECRET, body).
+         → Reject with 403 if invalid (prevents spoofed webhook calls).
+         → Use hmac.compare_digest() to prevent timing-attack leakage.
+      3. Parse body as JSON.
+      4. Pass payload to webhook_parser to produce typed event list.
+      5. Dispatch each event as an independent Celery task.
+      6. Return {"status": "ok"} immediately.
+
+    Phase A4 will implement the full RAG pipeline inside the Celery worker.
+    This endpoint only enqueues — it never awaits AI results.
+    """
+    from app.services.webhook_parser import parse_webhook_payload
+    from app.worker.tasks import process_fb_webhook
+
+    # ── 1. Read raw body (must happen before any framework parsing) ───────────
+    raw_body: bytes = await request.body()
+
+    # ── 2. HMAC-SHA256 Signature Verification ─────────────────────────────────
+    signature_header = request.headers.get("X-Hub-Signature-256", "")
+
+    if not signature_header.startswith("sha256="):
+        logger.warning("Webhook received without X-Hub-Signature-256 header.")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing webhook signature.",
+        )
+
+    received_digest = signature_header[len("sha256="):]
+    expected_digest = hmac.new(
+        settings.META_APP_SECRET.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    # Constant-time comparison prevents timing-attack side-channel leakage
+    if not hmac.compare_digest(received_digest, expected_digest):
+        logger.warning(
+            "Webhook HMAC verification failed — possible spoofed request."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid webhook signature.",
+        )
+
+    # ── 3. Parse JSON payload ─────────────────────────────────────────────────
+    try:
+        payload: dict = json.loads(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Malformed JSON body.",
+        )
+
+    # ── 4. Classify events ────────────────────────────────────────────────────
+    events = parse_webhook_payload(payload)
+
+    # ── 5. Dispatch each event as independent Celery task ─────────────────────
+    # Serialise typed dataclass → dict for Celery JSON serializer
+    dispatched = 0
+    for event in events:
+        event_dict = {
+            "type": type(event).__name__,   # "MessengerEvent" | "CommentEvent"
+            **event.__dict__,
+        }
+        # Remove non-serialisable raw field from Celery payload
+        event_dict.pop("raw", None)
+        process_fb_webhook.delay(event_dict)
+        dispatched += 1
+
+    logger.info(
+        "Webhook ingested: %d event(s) dispatched to Celery.", dispatched
+    )
+
+    # ── 6. Immediate 200 OK ───────────────────────────────────────────────────
+    # This response goes back to Meta in < 250 ms regardless of how long
+    # the Celery RAG pipeline takes (Phase A4).
+    return {"status": "ok", "events_queued": dispatched}
