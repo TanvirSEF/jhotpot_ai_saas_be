@@ -87,6 +87,8 @@ async def _delete_entity_embeddings(
 class ProductCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     sku: str | None = Field(None, max_length=100)
+    category: str | None = Field(None, max_length=100)
+    attributes: dict[str, str | list[str]] | None = None
     price: Decimal = Field(..., gt=0, decimal_places=2)
     stock_status: StockStatus = StockStatus.IN_STOCK
     description: str | None = None
@@ -95,6 +97,8 @@ class ProductCreate(BaseModel):
 class ProductUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     sku: str | None = Field(None, max_length=100)
+    category: str | None = Field(None, max_length=100)
+    attributes: dict[str, str | list[str]] | None = None
     price: Decimal | None = Field(None, gt=0, decimal_places=2)
     stock_status: StockStatus | None = None
     description: str | None = None
@@ -105,6 +109,8 @@ class ProductOut(BaseModel):
     org_id: uuid.UUID
     name: str
     sku: str | None
+    category: str | None
+    attributes: dict | None
     price: Decimal
     stock_status: StockStatus
     description: str | None
@@ -133,6 +139,8 @@ async def create_product(
         org_id=org_id,
         name=body.name,
         sku=body.sku,
+        category=body.category,
+        attributes=body.attributes,
         price=body.price,
         stock_status=body.stock_status,
         description=body.description,

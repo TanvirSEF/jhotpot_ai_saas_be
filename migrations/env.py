@@ -30,6 +30,7 @@ from app.models import (  # noqa: F401
     KnowledgeEmbedding,
     Organization,
     Product,
+    Resume,
     User,
 )
 

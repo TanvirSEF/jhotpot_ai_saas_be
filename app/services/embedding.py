@@ -10,6 +10,7 @@ Design decisions:
 """
 
 import logging
+import json
 from functools import lru_cache
 
 from openai import AsyncOpenAI
@@ -61,6 +62,12 @@ def build_product_text(product_data: dict) -> str:
     parts = [
         f"Product: {product_data.get('name', '')}",
         f"SKU: {product_data.get('sku', 'N/A')}",
+        f"Category: {product_data.get('category', '')}",
+        "Attributes: " + json.dumps(
+            product_data.get("attributes") or {},
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
         f"Price: BDT {product_data.get('price', 0):.2f}",
         f"Stock: {product_data.get('stock_status', 'Unknown')}",
         f"Description: {product_data.get('description', '')}",

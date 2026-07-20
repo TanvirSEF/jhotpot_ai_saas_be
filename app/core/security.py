@@ -8,7 +8,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
-_BCRYPT_MAX = 72
+PASSWORD_MIN_LENGTH = 10
+_BCRYPT_MAX_BYTES = 72
 _fernet: Fernet | None = None
 
 
@@ -24,16 +25,29 @@ def _get_fernet() -> Fernet:
 
 
 def hash_password(password: str) -> str:
-    raw = password.encode("utf-8")[:_BCRYPT_MAX]
+    validate_password(password)
+    raw = password.encode("utf-8")
     return bcrypt.hashpw(raw, bcrypt.gensalt()).decode()
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    raw = password.encode("utf-8")[:_BCRYPT_MAX]
+    raw = password.encode("utf-8")
+    if len(raw) > _BCRYPT_MAX_BYTES:
+        return False
     try:
         return bcrypt.checkpw(raw, hashed.encode())
     except ValueError:
         return False
+
+
+def validate_password(password: str) -> None:
+    """Validate a new password without silently changing its value."""
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise ValueError(
+            f"Password must be at least {PASSWORD_MIN_LENGTH} characters long"
+        )
+    if len(password.encode("utf-8")) > _BCRYPT_MAX_BYTES:
+        raise ValueError("Password must not exceed 72 UTF-8 bytes")
 
 
 def create_access_token(sub: str, expires_in: timedelta | None = None) -> str:

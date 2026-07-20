@@ -4,6 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import DECIMAL, DateTime, Enum, ForeignKey, String, Text, Uuid, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -23,6 +24,8 @@ class Product(Base):
     )
     name: Mapped[str] = mapped_column(String(255))
     sku: Mapped[str | None] = mapped_column(String(100))
+    category: Mapped[str | None] = mapped_column(String(100))
+    attributes: Mapped[dict | None] = mapped_column(JSONB)
     price: Mapped[Decimal] = mapped_column(DECIMAL(10, 2))
     stock_status: Mapped[StockStatus] = mapped_column(
         Enum(StockStatus, name="stock_status_enum"), default=StockStatus.IN_STOCK

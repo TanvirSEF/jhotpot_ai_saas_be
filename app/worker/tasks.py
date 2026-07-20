@@ -1,10 +1,10 @@
 """
 Celery background tasks — NexusSuite AI
 
-All tasks use `bind=True` so `self` gives access to retry machinery.
-Database access inside Celery uses a synchronous SQLAlchemy session
-(not async) because Celery workers run in a regular thread/process
-context, not an asyncio event loop.
+All tasks use `bind=True` so `self` gives access to retry machinery. Celery
+entry points are synchronous and use `asyncio.run()` around their async
+implementations. Each task owns an async SQLAlchemy engine and reliably
+disposes it before returning.
 
 Task registry:
   • generate_embeddings  — OpenAI → pgvector write (Products, FAQs, Guidelines)
@@ -15,10 +15,31 @@ Task registry:
 import asyncio
 import logging
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from app.core.config import settings
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _task_db_session() -> AsyncIterator[AsyncSession]:
+    """Create an isolated task session and always release its connection pool."""
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            yield session
+    finally:
+        await engine.dispose()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -61,23 +82,19 @@ def generate_embeddings(self, entity_type: str, entity_id: str) -> dict:
 
 async def _run_embedding(entity_type: str, entity_id: str) -> dict:
     """Async implementation called from the sync Celery task wrapper."""
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from sqlalchemy import select, delete
 
-    from app.core.config import settings
-    from app.models import Faq, KnowledgeEmbedding, Product
+    from app.models import Faq, KnowledgeEmbedding, Organization, Product
     from app.services.embedding import (
         get_embedding,
         build_product_text,
         build_faq_text,
+        build_guideline_text,
     )
 
     entity_uuid = uuid.UUID(entity_id)
 
-    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
-    Session = async_sessionmaker(bind=engine, expire_on_commit=False)
-
-    async with Session() as db:
+    async with _task_db_session() as db:
         # ── 1. Fetch source entity ────────────────────────────────────────────
         if entity_type == "product":
             result = await db.execute(select(Product).where(Product.id == entity_uuid))
@@ -90,11 +107,17 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
             text = build_product_text({
                 "name": entity.name,
                 "sku": entity.sku,
+                "category": entity.category,
+                "attributes": entity.attributes,
                 "price": float(entity.price),
                 "stock_status": entity.stock_status.value,
                 "description": entity.description,
             })
-            metadata = {"product_name": entity.name, "sku": entity.sku}
+            metadata = {
+                "product_name": entity.name,
+                "sku": entity.sku,
+                "category": entity.category,
+            }
 
         elif entity_type == "faq":
             result = await db.execute(select(Faq).where(Faq.id == entity_uuid))
@@ -106,6 +129,33 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
             org_id = entity.org_id
             text = build_faq_text(entity.question, entity.answer)
             metadata = {"question_preview": entity.question[:100]}
+
+        elif entity_type == "guideline":
+            result = await db.execute(
+                select(Organization).where(Organization.id == entity_uuid)
+            )
+            entity = result.scalar_one_or_none()
+            if not entity:
+                logger.warning(
+                    "Organization %s not found; skipping guideline embedding.",
+                    entity_id,
+                )
+                return {"status": "skipped", "reason": "entity_not_found"}
+
+            if not entity.global_guidelines or not entity.global_guidelines.strip():
+                await db.execute(
+                    delete(KnowledgeEmbedding).where(
+                        KnowledgeEmbedding.org_id == entity.id,
+                        KnowledgeEmbedding.entity_type == "guideline",
+                        KnowledgeEmbedding.entity_id == entity.id,
+                    )
+                )
+                await db.commit()
+                return {"status": "skipped", "reason": "guideline_is_empty"}
+
+            org_id = entity.id
+            text = build_guideline_text(entity.global_guidelines)
+            metadata = {"business_name": entity.business_name}
 
         else:
             logger.error("Unknown entity_type: %s", entity_type)
@@ -140,10 +190,12 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
             "Embedding saved [%s:%s] dims=%d",
             entity_type, entity_id, len(vector),
         )
-        return {"status": "ok", "entity_type": entity_type, "entity_id": entity_id, "dims": len(vector)}
-
-    await engine.dispose()
-
+        return {
+            "status": "ok",
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "dims": len(vector),
+        }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # process_fb_webhook  — Full RAG Pipeline (Phase A4)
@@ -204,9 +256,7 @@ async def _run_webhook_pipeline(event_dict: dict) -> dict:
     """Async implementation — called from the sync Celery wrapper."""
     import time
     from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-    from app.core.config import settings
     from app.core.security import decrypt_token
     from app.models import FbPage, Organization
     from app.services.rag import run_rag_pipeline
@@ -215,10 +265,7 @@ async def _run_webhook_pipeline(event_dict: dict) -> dict:
     event_type = event_dict.get("type")
     page_id = event_dict.get("page_id", "")
 
-    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
-    Session = async_sessionmaker(bind=engine, expire_on_commit=False)
-
-    async with Session() as db:
+    async with _task_db_session() as db:
         # ── 1. Look up the Facebook Page record ──────────────────────────────
         result = await db.execute(
             select(FbPage).where(FbPage.page_id == page_id)
@@ -317,9 +364,6 @@ async def _run_webhook_pipeline(event_dict: dict) -> dict:
             "reply_length": len(ai_reply),
         }
 
-    await engine.dispose()
-
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # export_resume_pdf  (Phase B3)
@@ -348,16 +392,12 @@ def export_resume_pdf(self, resume_id: str) -> dict:
 async def _run_export_resume_pdf(resume_id: str) -> dict:
     """Async wrapper for export_resume_pdf task."""
     from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-    from app.core.config import settings
     from app.models import Resume
     from app.services.pdf_generator import generate_resume_pdf
 
     resume_uuid = uuid.UUID(resume_id)
-    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
-    Session = async_sessionmaker(bind=engine, expire_on_commit=False)
 
-    async with Session() as db:
+    async with _task_db_session() as db:
         res = await db.execute(select(Resume).where(Resume.id == resume_uuid))
         resume = res.scalar_one_or_none()
 
@@ -373,6 +413,3 @@ async def _run_export_resume_pdf(resume_id: str) -> dict:
             "resume_id": resume_id,
             "pdf_size_bytes": len(pdf_bytes),
         }
-
-    await engine.dispose()
-

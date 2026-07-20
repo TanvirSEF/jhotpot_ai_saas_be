@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, Uuid, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -25,6 +25,12 @@ class KnowledgeEmbedding(Base):
 
     __table_args__ = (
         Index("ix_knowledge_embeddings_org_entity", "org_id", "entity_type"),
+        UniqueConstraint(
+            "org_id",
+            "entity_type",
+            "entity_id",
+            name="uq_knowledge_embeddings_entity",
+        ),
     )
 
     organization: Mapped["Organization"] = relationship(

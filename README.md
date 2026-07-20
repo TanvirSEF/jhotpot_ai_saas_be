@@ -1,61 +1,100 @@
 # NexusSuite API
 
-FastAPI backend for NexusSuite — auth, a Facebook bot service, and a CV/resume builder.
+Backend for NexusSuite AI, a multi-tenant SaaS platform that combines:
 
-## Tech stack
+- Facebook Page automation with a merchant-managed knowledge base and RAG replies.
+- ATS-focused resume creation, job-description optimization, and PDF export.
 
-- **FastAPI** + **Uvicorn** — async web framework / ASGI server
-- **SQLAlchemy 2.0 (async)** — ORM via async drivers (aiosqlite for dev, asyncpg for PostgreSQL)
-- **Pydantic v2** + **pydantic-settings** — validation & config
-- **PyJWT** + **bcrypt** — JWT auth & password hashing
+## Technology
 
-## Project structure
+- FastAPI and Uvicorn
+- SQLAlchemy 2 async sessions with PostgreSQL
+- pgvector for semantic retrieval
+- Redis and Celery for background work
+- OpenAI for embeddings and text generation
+- Alembic for schema migrations
+- Fernet encryption for stored Meta Page tokens
+- WeasyPrint with an xhtml2pdf fallback for PDF generation
 
-```
-app/
-├── main.py              # entry point: app, CORS, routers, DB bootstrap
-├── api/v1/              # versioned API routes
-│   ├── auth.py          # register + login (JWT)
-│   ├── bot.py           # Facebook bot (placeholder)
-│   └── resume.py        # CV builder (placeholder)
-├── core/                # config & security
-│   ├── config.py        # .env via pydantic-settings
-│   └── security.py      # password hashing + JWT
-├── db/session.py        # engine, session factory, Base, get_db
-└── models/all_models.py # SQLAlchemy models
-```
+PostgreSQL is required. SQLite is not supported because the schema uses JSONB,
+pgvector, and HNSW indexes.
 
-## Setup
+## Local setup
+
+1. Create and activate a Python 3.11+ virtual environment.
+2. Install dependencies:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Start PostgreSQL 15+ and Redis. The database role must be able to enable the
+   `vector` extension during the first migration.
+4. Copy `.env.example` to `.env`, then replace every placeholder credential.
+5. Apply migrations:
+
+   ```bash
+   alembic upgrade head
+   ```
+
+6. Start the API:
+
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+
+7. Start a development worker that consumes all queues:
+
+   ```bash
+   celery -A app.worker.celery_app worker -Q webhooks,embeddings,default --loglevel=info
+   ```
+
+The OpenAPI UI is available at `http://127.0.0.1:8000/docs`.
+
+## Configuration
+
+Configuration is loaded from `.env` through `app.core.config.Settings`. Startup
+fails early when PostgreSQL, encryption, OpenAI, or Meta credentials are not
+usable. Staging and production additionally require HTTPS URLs and an explicit
+CORS allowlist.
+
+Never commit `.env`. It is intentionally ignored by Git.
+
+## API areas
+
+The current OpenAPI document is the canonical route contract. The main route
+groups are:
+
+- `/api/v1/auth` — user registration and login
+- `/api/v1/org` — business profiles and operating guidelines
+- `/api/v1/knowledge` — products, FAQs, and semantic search
+- `/api/v1/fb` — Meta OAuth, connected Pages, and webhook ingestion
+- `/api/v1/resume` — resume CRUD, optimization, and PDF download
+
+Route names may differ from early PRD examples; resource ownership and behavior
+take precedence over matching those example names.
+
+## Database migrations
+
+The application runs migrations during startup for the current development
+workflow. Production deployments should run `alembic upgrade head` as a single
+release job before starting or rolling API replicas.
+
+Useful checks:
 
 ```bash
-# 1. Create & activate a virtual environment (already present in ./venv)
-python -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Configure environment
-cp .env.example .env              # then edit values as needed
-
-# 4. Run
-uvicorn app.main:app --reload
+alembic heads
+alembic history
+python -m unittest discover -s tests -v
 ```
 
-API docs are at **http://127.0.0.1:8000/docs** (Swagger UI).
+## PDF support
 
-## Endpoints
+WeasyPrint requires native operating-system libraries. When those libraries are
+not available, the application uses the pinned xhtml2pdf fallback. Production
+containers should install and verify the WeasyPrint runtime explicitly.
 
-| Method | Path                        | Description              |
-|--------|-----------------------------|--------------------------|
-| GET    | `/`                         | Project info             |
-| GET    | `/health`                   | Health check             |
-| POST   | `/api/v1/auth/register`     | Register a new user      |
-| POST   | `/api/v1/auth/login`        | Login, returns a JWT     |
-| GET    | `/api/v1/bot/`              | Bot status (placeholder) |
-| GET    | `/api/v1/resume/`           | Resume service (placeholder) |
+## Delivery plan
 
-## Notes
-
-- Tables are auto-created on startup for dev convenience. Use **Alembic** for real migrations.
-- Change `SECRET_KEY` before deploying.
+Backend hardening and feature-completion phases are tracked in
+`docs/backend_implementation_plan.md`.

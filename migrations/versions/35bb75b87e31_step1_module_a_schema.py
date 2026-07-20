@@ -27,6 +27,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # PostgreSQL registers the pgvector extension under the name `vector`.
+    # It must exist before a VECTOR column or HNSW index can be created.
+    op.execute('CREATE EXTENSION IF NOT EXISTS vector;')
+
     # ── 1. Recreate `users` with UUID primary key ───────────────────────────
     # PostgreSQL cannot directly cast INTEGER → UUID on a PK column.
     # Since this is a development environment with no production data, we

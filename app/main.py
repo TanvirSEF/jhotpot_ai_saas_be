@@ -40,13 +40,13 @@ async def lifespan(_app: FastAPI):
 
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, run_migrations)
-    logger.info("Database migrations applied ✓")
+    logger.info("Database migrations applied")
 
     # ── 3. Redis connectivity check ───────────────────────────────────────────
     r = redis_client.from_url(settings.REDIS_URL, socket_connect_timeout=5)
     r.ping()
     r.close()
-    logger.info("Redis connection verified ✓")
+    logger.info("Redis connection verified")
 
     logger.info(
         "%s is ready to serve traffic on %s",

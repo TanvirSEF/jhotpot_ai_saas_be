@@ -2,12 +2,13 @@ import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
 from app.db.session import get_db
-from app.models import Organization, User
+from app.models import KnowledgeEmbedding, Organization, User
+from app.worker.tasks import generate_embeddings
 
 router = APIRouter(prefix="/org", tags=["organization"])
 
@@ -47,6 +48,8 @@ async def create_org(
     db.add(org)
     await db.commit()
     await db.refresh(org)
+    if org.global_guidelines and org.global_guidelines.strip():
+        generate_embeddings.delay("guideline", str(org.id))
     return org
 
 
@@ -98,13 +101,24 @@ async def update_org(
             status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
         )
 
-    if org_in.business_name is not None:
-        org.business_name = org_in.business_name
-    if org_in.global_guidelines is not None:
-        org.global_guidelines = org_in.global_guidelines
+    update_data = org_in.model_dump(exclude_unset=True)
+    guidelines_changed = "global_guidelines" in update_data
+    for field, value in update_data.items():
+        setattr(org, field, value)
+
+    if guidelines_changed:
+        await db.execute(
+            delete(KnowledgeEmbedding).where(
+                KnowledgeEmbedding.org_id == org.id,
+                KnowledgeEmbedding.entity_type == "guideline",
+                KnowledgeEmbedding.entity_id == org.id,
+            )
+        )
 
     await db.commit()
     await db.refresh(org)
+    if guidelines_changed and org.global_guidelines and org.global_guidelines.strip():
+        generate_embeddings.delay("guideline", str(org.id))
     return org
 
 

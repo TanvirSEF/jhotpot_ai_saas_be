@@ -1,13 +1,21 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "NexusSuite API"
     API_V1_STR: str = "/api/v1"
-    BACKEND_CORS_ORIGINS: list[str] = ["*"]
+    ENVIRONMENT: Literal["development", "test", "staging", "production"] = (
+        "development"
+    )
+    LOG_LEVEL: str = "INFO"
+    BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
-    # sqlite+aiosqlite (dev) or postgresql+asyncpg://... (prod)
-    DATABASE_URL: str = "sqlite+aiosqlite:///./nexussuite.db"
+    # NexusSuite relies on PostgreSQL-only features such as JSONB and pgvector.
+    DATABASE_URL: str = (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/nexussuite"
+    )
 
     SECRET_KEY: str = "change-me"
     ALGORITHM: str = "HS256"
@@ -17,7 +25,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # Fernet key for AES encryption of Meta Page Access Tokens (PRD §6.2)
-    # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Generate with a short Python command using cryptography.fernet.Fernet.
     FERNET_KEY: str = "change-me"
 
     # ── OpenAI (Phase A1: embeddings & LLM, Phase A4: RAG) ──────────────────
@@ -41,7 +49,10 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
 
     model_config = SettingsConfigDict(
-        env_file=".env", case_sensitive=True, extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
     )
 
 

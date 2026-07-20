@@ -11,16 +11,17 @@ Check categories:
   WARNING  — degraded functionality; logs a warning but continues
 
 Checks performed:
-  1. SECRET_KEY is not the default placeholder
-  2. FERNET_KEY is a syntactically valid Fernet key
-  3. OPENAI_API_KEY is present and non-placeholder
-  4. META_APP_ID and META_APP_SECRET are present
-  5. CORS wildcard warning in non-local environments
+  1. PostgreSQL is configured with the asyncpg driver
+  2. SECRET_KEY is non-placeholder and sufficiently long
+  3. FERNET_KEY is a syntactically valid Fernet key
+  4. OPENAI_API_KEY is present and non-placeholder
+  5. META_APP_ID and META_APP_SECRET are present
+  6. Production URLs and CORS policy are safe
 """
 
 import logging
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet
 
 from app.core.config import settings
 
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 _PLACEHOLDER_SECRETS = {"change-me", "", "secret", "changeme"}
 _PLACEHOLDER_OPENAI  = {"", "sk-your-openai-api-key-here", "your-openai-api-key"}
 _PLACEHOLDER_META    = {"", "your-meta-app-id", "your-meta-app-secret"}
+_POSTGRESQL_ASYNC_PREFIX = "postgresql+asyncpg://"
 
 
 def validate_configuration() -> None:
@@ -47,28 +49,39 @@ def validate_configuration() -> None:
     critical: list[str] = []
     warnings: list[str] = []
 
-    # ── 1. SECRET_KEY ─────────────────────────────────────────────────────────
+    # ── 1. Database ───────────────────────────────────────────────────────────
+    if not settings.DATABASE_URL.startswith(_POSTGRESQL_ASYNC_PREFIX):
+        critical.append(
+            "DATABASE_URL must use PostgreSQL with the asyncpg driver "
+            f"({_POSTGRESQL_ASYNC_PREFIX}...). SQLite is not supported because "
+            "the application uses JSONB, pgvector, and HNSW indexes."
+        )
+
+    # ── 2. SECRET_KEY ─────────────────────────────────────────────────────────
     if settings.SECRET_KEY.lower() in _PLACEHOLDER_SECRETS:
         critical.append(
             "SECRET_KEY is set to a default/placeholder value. "
             "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
         )
+    elif len(settings.SECRET_KEY) < 32:
+        critical.append("SECRET_KEY must be at least 32 characters long.")
 
-    # ── 2. FERNET_KEY ─────────────────────────────────────────────────────────
+    # ── 3. FERNET_KEY ─────────────────────────────────────────────────────────
     if settings.FERNET_KEY.lower() in _PLACEHOLDER_SECRETS:
         critical.append(
             "FERNET_KEY is set to a default/placeholder value. "
-            "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+            "Generate one with cryptography.fernet.Fernet.generate_key()."
         )
     else:
         try:
             Fernet(settings.FERNET_KEY.encode())
         except Exception:
             critical.append(
-                "FERNET_KEY is not a valid Fernet key (must be URL-safe base64-encoded 32-byte key)."
+                "FERNET_KEY is not a valid Fernet key "
+                "(must be a URL-safe base64-encoded 32-byte key)."
             )
 
-    # ── 3. OPENAI_API_KEY ─────────────────────────────────────────────────────
+    # ── 4. OPENAI_API_KEY ─────────────────────────────────────────────────────
     if settings.OPENAI_API_KEY in _PLACEHOLDER_OPENAI:
         critical.append(
             "OPENAI_API_KEY is not configured. "
@@ -76,7 +89,7 @@ def validate_configuration() -> None:
             "Get yours at: https://platform.openai.com/api-keys"
         )
 
-    # ── 4. Meta App credentials ───────────────────────────────────────────────
+    # ── 5. Meta App credentials ───────────────────────────────────────────────
     if settings.META_APP_ID in _PLACEHOLDER_META:
         critical.append(
             "META_APP_ID is not configured. "
@@ -89,15 +102,22 @@ def validate_configuration() -> None:
             "Required for HMAC webhook signature verification (Phase A3)."
         )
 
-    # ── 5. CORS wildcard warning ───────────────────────────────────────────────
+    # ── 6. Environment-specific URL and CORS policy ───────────────────────────
     if settings.BACKEND_CORS_ORIGINS == ["*"]:
-        # Wildcard is acceptable in dev but dangerous in production
-        is_local = "localhost" in settings.BACKEND_URL or "127.0.0.1" in settings.BACKEND_URL
-        if not is_local:
-            warnings.append(
-                "BACKEND_CORS_ORIGINS is set to ['*'] but BACKEND_URL suggests a "
-                "non-local environment. Consider restricting CORS to your frontend domain."
-            )
+        message = (
+            "BACKEND_CORS_ORIGINS cannot use '*' outside local development. "
+            "Configure the exact frontend origin instead."
+        )
+        if settings.ENVIRONMENT in {"staging", "production"}:
+            critical.append(message)
+        else:
+            warnings.append(message)
+
+    if settings.ENVIRONMENT in {"staging", "production"}:
+        if not settings.BACKEND_URL.startswith("https://"):
+            critical.append("BACKEND_URL must use HTTPS in staging and production.")
+        if not settings.FRONTEND_URL.startswith("https://"):
+            critical.append("FRONTEND_URL must use HTTPS in staging and production.")
 
     # ── Report ────────────────────────────────────────────────────────────────
     for warning in warnings:
@@ -114,4 +134,4 @@ def validate_configuration() -> None:
             f"{'=' * 60}\n"
         )
 
-    logger.info("Configuration validation passed ✓ (%d check(s))", 5)
+    logger.info("Configuration validation passed (%d check groups)", 6)
