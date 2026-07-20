@@ -33,6 +33,7 @@ Design notes:
 """
 
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
 
@@ -43,11 +44,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
 from app.db.session import get_db
-from app.models import Faq, KnowledgeEmbedding, Organization, Product, StockStatus, User
-from app.worker.tasks import generate_embeddings
+from app.models import (
+    EmbeddingEntityType,
+    EmbeddingJobState,
+    EmbeddingStatusRecord,
+    Faq,
+    KnowledgeEmbedding,
+    Organization,
+    Product,
+    StockStatus,
+    User,
+)
+from app.services.embedding_status import delete_embedding_status
+from app.worker.dispatch import queue_embedding_tasks
 from app.worker.reliability import correlation_headers
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
+_MAX_REBUILD_TARGETS = 1000
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Shared helpers
@@ -78,6 +91,12 @@ async def _delete_entity_embeddings(
             KnowledgeEmbedding.entity_type == entity_type,
             KnowledgeEmbedding.entity_id == entity_id,
         )
+    )
+    await delete_embedding_status(
+        db,
+        org_id=org_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
     )
 
 
@@ -148,14 +167,15 @@ async def create_product(
         description=body.description,
     )
     db.add(product)
-    await db.commit()
-    await db.refresh(product)
+    await db.flush()
 
     # Queue background embedding generation
-    generate_embeddings.apply_async(
-        args=("product", str(product.id)),
+    await queue_embedding_tasks(
+        db,
+        [(org_id, "product", product.id)],
         headers=correlation_headers(request),
     )
+    await db.refresh(product)
 
     return product
 
@@ -221,14 +241,13 @@ async def update_product(
     for field, value in update_data.items():
         setattr(product, field, value)
 
-    await db.commit()
-    await db.refresh(product)
-
     # Keep the current vector searchable until the atomic upsert replaces it.
-    generate_embeddings.apply_async(
-        args=("product", str(product.id)),
+    await queue_embedding_tasks(
+        db,
+        [(org_id, "product", product.id)],
         headers=correlation_headers(request),
     )
+    await db.refresh(product)
 
     return product
 
@@ -298,13 +317,14 @@ async def create_faq(
 
     faq = Faq(org_id=org_id, question=body.question, answer=body.answer)
     db.add(faq)
-    await db.commit()
-    await db.refresh(faq)
+    await db.flush()
 
-    generate_embeddings.apply_async(
-        args=("faq", str(faq.id)),
+    await queue_embedding_tasks(
+        db,
+        [(org_id, "faq", faq.id)],
         headers=correlation_headers(request),
     )
+    await db.refresh(faq)
     return faq
 
 
@@ -362,14 +382,13 @@ async def update_faq(
     for field, value in update_data.items():
         setattr(faq, field, value)
 
-    await db.commit()
-    await db.refresh(faq)
-
     # Keep the current vector searchable until the atomic upsert replaces it.
-    generate_embeddings.apply_async(
-        args=("faq", str(faq.id)),
+    await queue_embedding_tasks(
+        db,
+        [(org_id, "faq", faq.id)],
         headers=correlation_headers(request),
     )
+    await db.refresh(faq)
 
     return faq
 
@@ -398,6 +417,139 @@ async def delete_faq(
 # ──────────────────────────────────────────────────────────────────────────────
 # Diagnostic: Vector Similarity Search
 # ──────────────────────────────────────────────────────────────────────────────
+
+class EmbeddingStatusOut(BaseModel):
+    entity_type: str
+    entity_id: uuid.UUID
+    state: str
+    task_id: str | None
+    attempts: int
+    content_hash: str | None
+    last_error_code: str | None
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class EmbeddingQueueOut(BaseModel):
+    queued: int
+    task_id: str | None = None
+
+
+async def _assert_embedding_source_exists(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    entity_type: EmbeddingEntityType,
+    entity_id: uuid.UUID,
+) -> None:
+    if entity_type is EmbeddingEntityType.PRODUCT:
+        statement = select(Product.id).where(Product.id == entity_id, Product.org_id == org_id)
+    elif entity_type is EmbeddingEntityType.FAQ:
+        statement = select(Faq.id).where(Faq.id == entity_id, Faq.org_id == org_id)
+    else:
+        if entity_id != org_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Guideline source not found.")
+        statement = select(Organization.id).where(Organization.id == org_id)
+
+    if (await db.execute(statement)).scalar_one_or_none() is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Embedding source not found.")
+
+
+@router.get("/{org_id}/embedding-status", response_model=list[EmbeddingStatusOut])
+async def list_embedding_statuses(
+    org_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    entity_type: EmbeddingEntityType | None = None,
+    state: EmbeddingJobState | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[EmbeddingStatusOut]:
+    await _get_owned_org(org_id, current_user, db)
+    statement = select(EmbeddingStatusRecord).where(EmbeddingStatusRecord.org_id == org_id)
+    if entity_type is not None:
+        statement = statement.where(EmbeddingStatusRecord.entity_type == entity_type.value)
+    if state is not None:
+        statement = statement.where(EmbeddingStatusRecord.state == state.value)
+    result = await db.execute(
+        statement.order_by(EmbeddingStatusRecord.updated_at.desc()).limit(limit).offset(offset)
+    )
+    return list(result.scalars().all())
+
+
+@router.post(
+    "/{org_id}/embeddings/{entity_type}/{entity_id}/retry",
+    response_model=EmbeddingQueueOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_embedding(
+    org_id: uuid.UUID,
+    entity_type: EmbeddingEntityType,
+    entity_id: uuid.UUID,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> EmbeddingQueueOut:
+    await _get_owned_org(org_id, current_user, db)
+    await _assert_embedding_source_exists(
+        db,
+        org_id=org_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+    )
+    task_ids = await queue_embedding_tasks(
+        db,
+        [(org_id, entity_type.value, entity_id)],
+        headers=correlation_headers(request),
+    )
+    return EmbeddingQueueOut(queued=1, task_id=task_ids[0])
+
+
+@router.post(
+    "/{org_id}/embeddings/rebuild",
+    response_model=EmbeddingQueueOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def rebuild_embeddings(
+    org_id: uuid.UUID,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> EmbeddingQueueOut:
+    await _get_owned_org(org_id, current_user, db)
+    product_ids = list(
+        (
+            await db.execute(
+                select(Product.id).where(Product.org_id == org_id).limit(_MAX_REBUILD_TARGETS + 1)
+            )
+        ).scalars()
+    )
+    faq_ids = list(
+        (
+            await db.execute(
+                select(Faq.id).where(Faq.org_id == org_id).limit(_MAX_REBUILD_TARGETS + 1)
+            )
+        ).scalars()
+    )
+    targets = [
+        *((org_id, "product", entity_id) for entity_id in product_ids),
+        *((org_id, "faq", entity_id) for entity_id in faq_ids),
+        (org_id, "guideline", org_id),
+    ]
+    if len(targets) > _MAX_REBUILD_TARGETS:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Rebuild is limited to {_MAX_REBUILD_TARGETS} sources per request.",
+        )
+
+    task_ids = await queue_embedding_tasks(
+        db,
+        targets,
+        headers=correlation_headers(request),
+    )
+    return EmbeddingQueueOut(queued=len(task_ids))
+
 
 class SearchResult(BaseModel):
     entity_type: str

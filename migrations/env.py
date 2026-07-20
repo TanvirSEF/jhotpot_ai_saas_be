@@ -27,6 +27,7 @@ from app.db.session import Base
 from app.models import (  # noqa: F401
     FbPage,
     Faq,
+    EmbeddingStatusRecord,
     KnowledgeEmbedding,
     Organization,
     Product,

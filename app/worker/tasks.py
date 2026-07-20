@@ -18,7 +18,12 @@ import uuid
 
 from app.worker.celery_app import celery_app
 from app.worker.db import task_db_session as _task_db_session
-from app.worker.reliability import PermanentTaskError, request_id_from_task, retry_or_fail
+from app.worker.reliability import (
+    PermanentTaskError,
+    request_id_from_task,
+    retry_or_fail,
+    task_will_retry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +54,24 @@ def generate_embeddings(self, entity_type: str, entity_id: str) -> dict:
         dict with status and embedding dimensionality for Celery result backend.
     """
     try:
-        result = asyncio.run(_run_embedding(entity_type, entity_id))
+        result = asyncio.run(
+            _run_embedding(entity_type, entity_id, task_id=str(self.request.id))
+        )
         return result
     except Exception as exc:
+        if not task_will_retry(self, exc):
+            try:
+                from app.services.embedding_status import mark_embedding_failed
+
+                asyncio.run(
+                    mark_embedding_failed(entity_type, entity_id, type(exc).__name__)
+                )
+            except Exception:
+                logger.exception(
+                    "Could not mark embedding status failed [%s:%s]",
+                    entity_type,
+                    entity_id,
+                )
         retry_or_fail(
             self,
             exc,
@@ -60,7 +80,12 @@ def generate_embeddings(self, entity_type: str, entity_id: str) -> dict:
         )
 
 
-async def _run_embedding(entity_type: str, entity_id: str) -> dict:
+async def _run_embedding(
+    entity_type: str,
+    entity_id: str,
+    *,
+    task_id: str | None = None,
+) -> dict:
     """Async implementation called from the sync Celery task wrapper."""
     from sqlalchemy import delete, func, select
     from sqlalchemy.dialects.postgresql import insert
@@ -72,6 +97,8 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
         build_faq_text,
         build_guideline_text,
     )
+    from app.models.embedding_status import EmbeddingJobState
+    from app.services.embedding_status import content_digest, set_embedding_status
 
     entity_uuid = uuid.UUID(entity_id)
 
@@ -81,8 +108,7 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
             result = await db.execute(select(Product).where(Product.id == entity_uuid))
             entity = result.scalar_one_or_none()
             if not entity:
-                logger.warning("Product %s not found; skipping embedding.", entity_id)
-                return {"status": "skipped", "reason": "entity_not_found"}
+                raise PermanentTaskError("Embedding source does not exist.")
 
             org_id = entity.org_id
             text = build_product_text({
@@ -104,8 +130,7 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
             result = await db.execute(select(Faq).where(Faq.id == entity_uuid))
             entity = result.scalar_one_or_none()
             if not entity:
-                logger.warning("FAQ %s not found; skipping embedding.", entity_id)
-                return {"status": "skipped", "reason": "entity_not_found"}
+                raise PermanentTaskError("Embedding source does not exist.")
 
             org_id = entity.org_id
             text = build_faq_text(entity.question, entity.answer)
@@ -117,11 +142,7 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
             )
             entity = result.scalar_one_or_none()
             if not entity:
-                logger.warning(
-                    "Organization %s not found; skipping guideline embedding.",
-                    entity_id,
-                )
-                return {"status": "skipped", "reason": "entity_not_found"}
+                raise PermanentTaskError("Embedding source does not exist.")
 
             if not entity.global_guidelines or not entity.global_guidelines.strip():
                 await db.execute(
@@ -130,6 +151,14 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
                         KnowledgeEmbedding.entity_type == "guideline",
                         KnowledgeEmbedding.entity_id == entity.id,
                     )
+                )
+                await set_embedding_status(
+                    db,
+                    org_id=entity.id,
+                    entity_type="guideline",
+                    entity_id=entity.id,
+                    state=EmbeddingJobState.NOT_REQUIRED,
+                    task_id=task_id,
                 )
                 await db.commit()
                 return {"status": "skipped", "reason": "guideline_is_empty"}
@@ -142,6 +171,15 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
             raise PermanentTaskError("Unsupported embedding entity type.")
 
         # ── 2. Generate embedding ────────────────────────────────────────────
+        await set_embedding_status(
+            db,
+            org_id=org_id,
+            entity_type=entity_type,
+            entity_id=entity_uuid,
+            state=EmbeddingJobState.PROCESSING,
+            task_id=task_id,
+        )
+        await db.commit()
         logger.info("Generating embedding [%s:%s] text_len=%d", entity_type, entity_id, len(text))
         vector = await get_embedding(text)
 
@@ -165,6 +203,15 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
             },
         )
         await db.execute(statement)
+        await set_embedding_status(
+            db,
+            org_id=org_id,
+            entity_type=entity_type,
+            entity_id=entity_uuid,
+            state=EmbeddingJobState.READY,
+            task_id=task_id,
+            content_hash=content_digest(text),
+        )
         await db.commit()
 
         logger.info(

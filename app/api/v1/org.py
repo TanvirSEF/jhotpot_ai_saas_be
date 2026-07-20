@@ -7,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
 from app.db.session import get_db
-from app.models import KnowledgeEmbedding, Organization, User
-from app.worker.tasks import generate_embeddings
+from app.models import EmbeddingJobState, KnowledgeEmbedding, Organization, User
+from app.services.embedding_status import set_embedding_status
+from app.worker.dispatch import queue_embedding_tasks
 from app.worker.reliability import correlation_headers
 
 router = APIRouter(prefix="/org", tags=["organization"])
@@ -48,13 +49,23 @@ async def create_org(
         global_guidelines=org_in.global_guidelines,
     )
     db.add(org)
-    await db.commit()
-    await db.refresh(org)
+    await db.flush()
     if org.global_guidelines and org.global_guidelines.strip():
-        generate_embeddings.apply_async(
-            args=("guideline", str(org.id)),
+        await queue_embedding_tasks(
+            db,
+            [(org.id, "guideline", org.id)],
             headers=correlation_headers(request),
         )
+    else:
+        await set_embedding_status(
+            db,
+            org_id=org.id,
+            entity_type="guideline",
+            entity_id=org.id,
+            state=EmbeddingJobState.NOT_REQUIRED,
+        )
+        await db.commit()
+    await db.refresh(org)
     return org
 
 
@@ -120,14 +131,23 @@ async def update_org(
                 KnowledgeEmbedding.entity_id == org.id,
             )
         )
+        await set_embedding_status(
+            db,
+            org_id=org.id,
+            entity_type="guideline",
+            entity_id=org.id,
+            state=EmbeddingJobState.NOT_REQUIRED,
+        )
 
-    await db.commit()
-    await db.refresh(org)
     if guidelines_changed and org.global_guidelines and org.global_guidelines.strip():
-        generate_embeddings.apply_async(
-            args=("guideline", str(org.id)),
+        await queue_embedding_tasks(
+            db,
+            [(org.id, "guideline", org.id)],
             headers=correlation_headers(request),
         )
+    else:
+        await db.commit()
+    await db.refresh(org)
     return org
 
 

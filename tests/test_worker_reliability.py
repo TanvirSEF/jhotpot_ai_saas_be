@@ -1,5 +1,6 @@
 import unittest
-from unittest.mock import patch
+import uuid
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from sqlalchemy.dialects import postgresql
@@ -7,6 +8,7 @@ from sqlalchemy.dialects import postgresql
 from app.models import KnowledgeEmbedding, TaskFailure
 from app.services.graph_api import GraphAPIError, _raise_for_reply_error
 from app.worker.celery_app import celery_app
+from app.worker.tasks import generate_embeddings
 from app.worker.reliability import (
     PermanentTaskError,
     _safe_error_message,
@@ -105,6 +107,25 @@ class WorkerReliabilityTests(unittest.TestCase):
         )
         sql = str(statement.compile(dialect=postgresql.dialect()))
         self.assertIn("ON CONFLICT ON CONSTRAINT uq_knowledge_embeddings_entity", sql)
+
+    def test_terminal_embedding_failure_updates_operational_status(self):
+        entity_id = str(uuid.uuid4())
+        failure = PermanentTaskError("invalid source")
+        mark_failed = AsyncMock()
+
+        with (
+            patch("app.worker.tasks._run_embedding", AsyncMock(side_effect=failure)),
+            patch("app.services.embedding_status.mark_embedding_failed", mark_failed),
+            patch("app.worker.tasks.retry_or_fail", side_effect=failure),
+        ):
+            with self.assertRaises(PermanentTaskError):
+                generate_embeddings.run("product", entity_id)
+
+        mark_failed.assert_awaited_once_with(
+            "product",
+            entity_id,
+            "PermanentTaskError",
+        )
 
 
 if __name__ == "__main__":

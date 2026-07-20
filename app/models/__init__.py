@@ -6,6 +6,11 @@ from app.models.faq import Faq
 from app.models.knowledge import KnowledgeEmbedding
 from app.models.resume import Resume
 from app.models.task_failure import TaskFailure
+from app.models.embedding_status import (
+    EmbeddingEntityType,
+    EmbeddingJobState,
+    EmbeddingStatusRecord,
+)
 
 __all__ = [
     "User",
@@ -17,4 +22,7 @@ __all__ = [
     "KnowledgeEmbedding",
     "Resume",
     "TaskFailure",
+    "EmbeddingJobState",
+    "EmbeddingEntityType",
+    "EmbeddingStatusRecord",
 ]

@@ -71,6 +71,12 @@ def request_id_from_task(task: Any) -> str | None:
     return str(value)[:255] if value else None
 
 
+def task_will_retry(task: Any, exc: BaseException) -> bool:
+    retries = int(getattr(task.request, "retries", 0) or 0)
+    max_retries = int(task.max_retries or 0)
+    return is_retryable_exception(exc) and retries < max_retries
+
+
 def correlation_headers(request: Any) -> dict[str, str]:
     """Build JSON-safe Celery headers from a FastAPI request."""
     request_id = getattr(getattr(request, "state", None), "request_id", None)
@@ -143,7 +149,7 @@ def retry_or_fail(
     task_id = str(getattr(task.request, "id", "unknown"))[:255]
     task_name = str(getattr(task, "name", type(task).__name__))[:255]
 
-    if is_retryable_exception(exc) and retries < max_retries:
+    if task_will_retry(task, exc):
         countdown = jittered_backoff(base_delay, retries)
         logger.warning(
             "Retrying task=%s task_id=%s request_id=%s attempt=%d/%d in=%ds error=%s",

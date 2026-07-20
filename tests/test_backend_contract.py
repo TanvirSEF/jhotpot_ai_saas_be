@@ -19,6 +19,9 @@ class BackendContractTests(unittest.TestCase):
             "/api/v1/knowledge/{org_id}/products",
             "/api/v1/knowledge/{org_id}/faqs",
             "/api/v1/knowledge/{org_id}/search",
+            "/api/v1/knowledge/{org_id}/embedding-status",
+            "/api/v1/knowledge/{org_id}/embeddings/rebuild",
+            "/api/v1/knowledge/{org_id}/embeddings/{entity_type}/{entity_id}/retry",
             "/api/v1/fb/connect",
             "/api/v1/fb/webhook",
             "/api/v1/resume",
@@ -55,6 +58,7 @@ class BackendContractTests(unittest.TestCase):
             {
                 "Faq",
                 "FbPage",
+                "EmbeddingStatusRecord",
                 "KnowledgeEmbedding",
                 "Organization",
                 "Product",
