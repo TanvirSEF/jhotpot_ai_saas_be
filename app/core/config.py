@@ -30,7 +30,15 @@ class Settings(BaseSettings):
     # ── Meta / Facebook App (Phase A2: OAuth, Phase A3: Webhooks) ───────────
     META_APP_ID: str = ""
     META_APP_SECRET: str = ""
-    META_VERIFY_TOKEN: str = "nexussuite-verify"  # arbitrary secret used in webhook setup
+    META_VERIFY_TOKEN: str = "nexussuite-verify"
+
+    # ── URL config (swap per environment) ───────────────────────────────────
+    # Dev:  BACKEND_URL  = ngrok https URL  (e.g. https://xxxx.ngrok-free.app)
+    # Prod: BACKEND_URL  = https://api.yourdomain.com
+    BACKEND_URL: str = "http://localhost:8000"
+    # Dev:  FRONTEND_URL = http://localhost:3000
+    # Prod: FRONTEND_URL = https://yourdomain.com
+    FRONTEND_URL: str = "http://localhost:3000"
 
     model_config = SettingsConfigDict(
         env_file=".env", case_sensitive=True, extra="ignore"
