@@ -11,6 +11,7 @@ from app.models.embedding_status import (
     EmbeddingJobState,
     EmbeddingStatusRecord,
 )
+from app.models.webhook_event import WebhookEvent
 
 __all__ = [
     "User",
@@ -25,4 +26,5 @@ __all__ = [
     "EmbeddingJobState",
     "EmbeddingEntityType",
     "EmbeddingStatusRecord",
+    "WebhookEvent",
 ]

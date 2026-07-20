@@ -50,10 +50,17 @@ from app.core.security_store import (
 from app.db.session import get_db
 from app.models import FbPage, Organization, User
 from app.services.meta import (
+    MetaAPIError,
+    REQUIRED_PAGE_SUBSCRIPTIONS,
+    REQUIRED_PAGE_TOKEN_SCOPES,
     build_oauth_url,
     debug_token,
+    evaluate_token_health,
     exchange_code_for_user_token,
+    get_page_subscription,
     get_managed_pages,
+    subscribe_page_webhooks,
+    unsubscribe_page_webhooks,
     upgrade_to_long_lived_token,
 )
 
@@ -148,7 +155,18 @@ class PageOut(BaseModel):
     page_id: str
     page_name: str | None
     is_bot_active: bool
+    connection_status: str
+    subscription_status: str
+    token_status: str
+    subscribed_fields: list[str]
+    token_expires_at: datetime | None
+    data_access_expires_at: datetime | None
+    last_token_check_at: datetime | None
+    last_subscription_attempt_at: datetime | None
+    last_error_code: str | None
+    disconnected_at: datetime | None
     created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -157,6 +175,30 @@ class ToggleResponse(BaseModel):
     page_id: str
     is_bot_active: bool
     message: str
+
+
+class PageHealthOut(BaseModel):
+    page_id: str
+    page_name: str | None
+    connection_status: str
+    subscription_status: str
+    token_status: str
+    subscribed_fields: list[str]
+    required_fields: list[str]
+    missing_scopes: list[str]
+    token_expires_at: datetime | None
+    data_access_expires_at: datetime | None
+    checked_at: datetime
+
+
+class SubscriptionResponse(BaseModel):
+    page_id: str
+    subscription_status: str
+    subscribed_fields: list[str]
+
+
+class PageTransferRequest(BaseModel):
+    target_org_id: uuid.UUID
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -182,6 +224,33 @@ async def _get_page_for_user(
     if not page:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Facebook Page not found.")
     return page
+
+
+def _require_page_token(page: FbPage) -> str:
+    if not page.encrypted_access_token:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Facebook Page must be reconnected before this operation.",
+        )
+    try:
+        return decrypt_token(page.encrypted_access_token)
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Stored Facebook credential is unavailable; reconnect the Page.",
+        ) from exc
+
+
+def _apply_token_health(page: FbPage, token_info: dict, *, checked_at: datetime) -> list[str]:
+    health = evaluate_token_health(token_info, now=checked_at)
+    page.token_status = health.status
+    page.token_expires_at = health.expires_at
+    page.data_access_expires_at = health.data_access_expires_at
+    page.last_token_check_at = checked_at
+    if health.status != "valid":
+        page.connection_status = "needs_reauth"
+        page.is_bot_active = False
+    return health.missing_scopes
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -302,34 +371,84 @@ async def facebook_oauth_callback(
 
     # ── 5 & 6. Encrypt and upsert each page ──────────────────────────────────
     connected_count = 0
+    refreshed_count = 0
+    conflict_count = 0
+    subscribed_count = 0
     for page_data in pages:
         encrypted_token = encrypt_token(page_data.access_token)
 
         existing_result = await db.execute(
-            select(FbPage).where(
-                FbPage.page_id == page_data.page_id,
-                FbPage.org_id == org_id,
-            )
+            select(FbPage).where(FbPage.page_id == page_data.page_id)
         )
         existing = existing_result.scalar_one_or_none()
 
-        if existing:
-            # Refresh token and name on reconnect
-            existing.encrypted_access_token = encrypted_token
-            existing.page_name = page_data.page_name
-            existing.is_bot_active = True
-            logger.info("Refreshed token for existing page %s", page_data.page_id)
-        else:
-            new_page = FbPage(
+        if existing is not None and existing.org_id != org_id:
+            conflict_count += 1
+            logger.warning(
+                "Page ownership conflict page=%s requested_org=%s",
+                page_data.page_id,
+                org_id,
+            )
+            continue
+
+        if existing is None:
+            page = FbPage(
                 org_id=org_id,
                 page_id=page_data.page_id,
                 page_name=page_data.page_name,
                 encrypted_access_token=encrypted_token,
-                is_bot_active=True,
+                is_bot_active=False,
+                connection_status="connected",
+                subscription_status="pending",
+                token_status="unknown",
+                subscribed_fields=[],
             )
-            db.add(new_page)
+            db.add(page)
             connected_count += 1
-            logger.info("Connected new page: %s (%s)", page_data.page_name, page_data.page_id)
+        else:
+            page = existing
+            page.encrypted_access_token = encrypted_token
+            page.page_name = page_data.page_name
+            page.connection_status = "connected"
+            page.subscription_status = "pending"
+            page.token_status = "unknown"
+            page.subscribed_fields = []
+            page.disconnected_at = None
+            refreshed_count += 1
+
+        checked_at = datetime.now(timezone.utc)
+        try:
+            token_info = await debug_token(page_data.access_token)
+            _apply_token_health(page, token_info, checked_at=checked_at)
+            if page.token_status == "valid":
+                page.last_subscription_attempt_at = checked_at
+                subscription = await subscribe_page_webhooks(
+                    page.page_id,
+                    page_data.access_token,
+                )
+                page.subscription_status = "subscribed"
+                page.subscribed_fields = subscription.fields
+                page.is_bot_active = True
+                page.last_error_code = None
+                subscribed_count += 1
+            else:
+                page.subscription_status = "failed"
+                page.last_error_code = page.token_status
+        except MetaAPIError as exc:
+            page.last_error_code = f"meta_{exc.meta_code or 'request_failed'}"[:100]
+            page.subscription_status = "failed"
+            page.is_bot_active = False
+            if exc.meta_code == 190:
+                page.token_status = "invalid"
+                page.connection_status = "needs_reauth"
+
+        logger.info(
+            "Page lifecycle updated page=%s connection=%s subscription=%s token=%s",
+            page.page_id,
+            page.connection_status,
+            page.subscription_status,
+            page.token_status,
+        )
 
     await db.commit()
 
@@ -337,13 +456,21 @@ async def facebook_oauth_callback(
         "OAuth complete — org=%s pages_connected=%d pages_refreshed=%d",
         org_id,
         connected_count,
-        len(pages) - connected_count,
+        refreshed_count,
     )
 
     # ── 7. Redirect to frontend ───────────────────────────────────────────────
+    callback_status = (
+        "partial"
+        if conflict_count
+        or subscribed_count < connected_count + refreshed_count
+        else "connected"
+    )
     redirect_url = (
         f"{settings.FRONTEND_URL}/dashboard/pages"
-        f"?status=connected&pages={len(pages)}"
+        f"?status={callback_status}"
+        f"&pages={connected_count + refreshed_count}"
+        f"&subscribed={subscribed_count}&conflicts={conflict_count}"
     )
     return RedirectResponse(url=redirect_url, status_code=302)
 
@@ -392,7 +519,17 @@ async def toggle_bot_active(
     When False the Celery worker skips AI processing for this page's webhooks.
     """
     page = await _get_page_for_user(db, page_record_id, current_user)
-    page.is_bot_active = not page.is_bot_active
+    activating = not page.is_bot_active
+    if activating and (
+        page.connection_status != "connected"
+        or page.subscription_status != "subscribed"
+        or page.token_status != "valid"
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Page health must be valid and subscribed before activating the bot.",
+        )
+    page.is_bot_active = activating
     await db.commit()
     await db.refresh(page)
 
@@ -413,40 +550,234 @@ async def disconnect_page(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """
-    Disconnect a Facebook Page — deletes the db record and its encrypted token.
-    The merchant will need to reconnect via /fb/connect to re-enable the bot.
+    Disconnect a Facebook Page, remove its remote webhook subscription, and
+    erase the encrypted token while retaining lifecycle history.
     """
     page = await _get_page_for_user(db, page_record_id, current_user)
-    page_name = page.page_name
-    await db.delete(page)
+    if page.connection_status == "disconnected":
+        return None
+    unsubscribe_error: str | None = None
+    if page.encrypted_access_token:
+        try:
+            plain_token = decrypt_token(page.encrypted_access_token)
+        except Exception:
+            plain_token = None
+            unsubscribe_error = "credential_unavailable"
+        if plain_token:
+            try:
+                await unsubscribe_page_webhooks(page.page_id, plain_token)
+            except MetaAPIError as exc:
+                if exc.meta_code != 190:
+                    unsubscribe_error = (
+                        f"meta_unsubscribe_{exc.meta_code or 'request_failed'}"[:100]
+                    )
+                    logger.warning(
+                        "Remote Page unsubscribe failed record=%s code=%s; "
+                        "continuing local disconnect",
+                        page_record_id,
+                        exc.meta_code,
+                    )
+
+    page.encrypted_access_token = None
+    page.is_bot_active = False
+    page.connection_status = "disconnected"
+    page.subscription_status = "failed" if unsubscribe_error else "unsubscribed"
+    page.token_status = "missing"
+    page.subscribed_fields = []
+    page.disconnected_at = datetime.now(timezone.utc)
+    page.last_error_code = unsubscribe_error
     await db.commit()
-    logger.info("Disconnected page '%s' (id=%s)", page_name, page_record_id)
+    logger.info("Disconnected page record=%s external_page=%s", page_record_id, page.page_id)
 
 
-@router.get("/pages/{page_record_id}/health")
+@router.patch("/pages/{page_record_id}/transfer", response_model=PageOut)
+async def transfer_disconnected_page(
+    page_record_id: uuid.UUID,
+    body: PageTransferRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PageOut:
+    page = await _get_page_for_user(db, page_record_id, current_user)
+    if page.connection_status != "disconnected":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Disconnect the Page before transferring it to another organization.",
+        )
+    target = await db.execute(
+        select(Organization.id).where(
+            Organization.id == body.target_org_id,
+            Organization.user_id == current_user.id,
+        )
+    )
+    if target.scalar_one_or_none() is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Target organization not found.")
+    page.org_id = body.target_org_id
+    await db.commit()
+    await db.refresh(page)
+    return page
+
+
+@router.get("/pages/{page_record_id}/health", response_model=PageHealthOut)
 async def check_page_token_health(
     page_record_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> PageHealthOut:
     """
     Diagnostic: decode the stored page token and check its validity + scopes
     via Meta's debug_token endpoint.
 
-    Returns Meta's raw token inspection payload.
+    Returns a sanitized lifecycle assessment and never exposes token payloads.
     """
     page = await _get_page_for_user(db, page_record_id, current_user)
-    plain_token = decrypt_token(page.encrypted_access_token)
-    token_info = await debug_token(plain_token)
-    # Never return the raw token in the response
-    return {
-        "page_id": page.page_id,
-        "page_name": page.page_name,
-        "is_bot_active": page.is_bot_active,
-        "token_valid": token_info.get("is_valid", False),
-        "expires_at": token_info.get("expires_at"),
-        "scopes": token_info.get("scopes", []),
-    }
+    checked_at = datetime.now(timezone.utc)
+    try:
+        plain_token = _require_page_token(page)
+    except HTTPException:
+        page.connection_status = "needs_reauth"
+        page.token_status = "missing"
+        page.subscription_status = "unsubscribed"
+        page.is_bot_active = False
+        page.last_token_check_at = checked_at
+        await db.commit()
+        raise
+
+    try:
+        token_info = await debug_token(plain_token)
+        missing_scopes = _apply_token_health(page, token_info, checked_at=checked_at)
+    except MetaAPIError as exc:
+        page.last_token_check_at = checked_at
+        page.last_error_code = f"meta_{exc.meta_code or 'request_failed'}"[:100]
+        if exc.meta_code == 190:
+            page.connection_status = "needs_reauth"
+            page.token_status = "invalid"
+            page.is_bot_active = False
+            await db.commit()
+            return PageHealthOut(
+                page_id=page.page_id,
+                page_name=page.page_name,
+                connection_status=page.connection_status,
+                subscription_status=page.subscription_status,
+                token_status=page.token_status,
+                subscribed_fields=page.subscribed_fields,
+                required_fields=list(REQUIRED_PAGE_SUBSCRIPTIONS),
+                missing_scopes=list(REQUIRED_PAGE_TOKEN_SCOPES),
+                token_expires_at=page.token_expires_at,
+                data_access_expires_at=page.data_access_expires_at,
+                checked_at=checked_at,
+            )
+        await db.commit()
+        raise
+
+    if page.token_status == "valid":
+        try:
+            subscription = await get_page_subscription(page.page_id, plain_token)
+        except MetaAPIError as exc:
+            page.subscription_status = "failed"
+            page.is_bot_active = False
+            page.last_error_code = f"meta_{exc.meta_code or 'request_failed'}"[:100]
+            await db.commit()
+            raise
+        missing_fields = set(REQUIRED_PAGE_SUBSCRIPTIONS) - set(subscription.fields)
+        page.subscribed_fields = subscription.fields
+        page.subscription_status = (
+            "subscribed" if subscription.subscribed and not missing_fields else "failed"
+        )
+        if page.subscription_status != "subscribed":
+            page.is_bot_active = False
+            page.last_error_code = "subscription_missing_fields"
+        else:
+            page.last_error_code = None
+    else:
+        page.subscription_status = "failed"
+        page.last_error_code = page.token_status
+    page.connection_status = "connected" if page.token_status == "valid" else "needs_reauth"
+    await db.commit()
+
+    return PageHealthOut(
+        page_id=page.page_id,
+        page_name=page.page_name,
+        connection_status=page.connection_status,
+        subscription_status=page.subscription_status,
+        token_status=page.token_status,
+        subscribed_fields=page.subscribed_fields,
+        required_fields=list(REQUIRED_PAGE_SUBSCRIPTIONS),
+        missing_scopes=missing_scopes,
+        token_expires_at=page.token_expires_at,
+        data_access_expires_at=page.data_access_expires_at,
+        checked_at=checked_at,
+    )
+
+
+@router.post("/pages/{page_record_id}/subscribe", response_model=SubscriptionResponse)
+async def repair_page_subscription(
+    page_record_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SubscriptionResponse:
+    page = await _get_page_for_user(db, page_record_id, current_user)
+    plain_token = _require_page_token(page)
+    checked_at = datetime.now(timezone.utc)
+    try:
+        token_info = await debug_token(plain_token)
+    except MetaAPIError as exc:
+        page.last_token_check_at = checked_at
+        page.last_error_code = f"meta_{exc.meta_code or 'request_failed'}"[:100]
+        page.subscription_status = "failed"
+        page.is_bot_active = False
+        if exc.meta_code == 190:
+            page.connection_status = "needs_reauth"
+            page.token_status = "invalid"
+        await db.commit()
+        raise
+    _apply_token_health(page, token_info, checked_at=checked_at)
+    if page.token_status != "valid":
+        page.subscription_status = "failed"
+        page.last_error_code = page.token_status
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Page token is not healthy; reconnect before subscribing.",
+        )
+
+    page.last_subscription_attempt_at = checked_at
+    try:
+        subscription = await subscribe_page_webhooks(page.page_id, plain_token)
+    except MetaAPIError as exc:
+        page.subscription_status = "failed"
+        page.is_bot_active = False
+        page.last_error_code = f"meta_{exc.meta_code or 'request_failed'}"[:100]
+        await db.commit()
+        raise
+
+    page.connection_status = "connected"
+    page.subscription_status = "subscribed"
+    page.subscribed_fields = subscription.fields
+    page.last_error_code = None
+    await db.commit()
+    return SubscriptionResponse(
+        page_id=page.page_id,
+        subscription_status=page.subscription_status,
+        subscribed_fields=page.subscribed_fields,
+    )
+
+
+@router.get("/pages/{page_record_id}/reconnect", response_model=ConnectResponse)
+async def reconnect_page(
+    page_record_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ConnectResponse:
+    page = await _get_page_for_user(db, page_record_id, current_user)
+    state, state_id = _create_state_token(page.org_id, current_user.id)
+    try:
+        await register_oauth_state(state_id, ttl_seconds=_STATE_EXPIRE_MINUTES * 60)
+    except SecurityStoreUnavailable as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Facebook reconnection is temporarily unavailable.",
+        ) from exc
+    return ConnectResponse(oauth_url=build_oauth_url(state))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -492,7 +823,10 @@ async def webhook_verify(
 
 
 @router.post("/webhook", status_code=status.HTTP_200_OK)
-async def webhook_ingest(request: Request) -> dict:
+async def webhook_ingest(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """
     Meta Webhook Event Ingestion (Phase A3).
 
@@ -508,13 +842,19 @@ async def webhook_ingest(request: Request) -> dict:
          → Use hmac.compare_digest() to prevent timing-attack leakage.
       3. Parse body as JSON.
       4. Pass payload to webhook_parser to produce typed event list.
-      5. Dispatch each event as an independent Celery task.
-      6. Return {"status": "ok"} immediately.
+      5. Commit each provider event ID to the durable PostgreSQL inbox.
+      6. Dispatch newly accepted inbox IDs as independent Celery tasks.
+      7. Return {"status": "ok"}; broker failures remain recoverable.
 
     Phase A4 will implement the full RAG pipeline inside the Celery worker.
     This endpoint only enqueues — it never awaits AI results.
     """
+    from app.services.webhook_inbox import (
+        mark_webhook_queued,
+        persist_webhook_events,
+    )
     from app.services.webhook_parser import parse_webhook_payload
+    from app.worker.reliability import correlation_headers
     from app.worker.tasks import process_fb_webhook
 
     # ── 1. Read raw body (must happen before any framework parsing) ───────────
@@ -561,25 +901,49 @@ async def webhook_ingest(request: Request) -> dict:
 
     # ── 5. Dispatch each event as independent Celery task ─────────────────────
     # Serialise typed dataclass → dict for Celery JSON serializer
+    inbox = await persist_webhook_events(
+        db,
+        events,
+        request_id=getattr(request.state, "request_id", None),
+    )
+
+    # The inbox commit is the durability boundary. If Redis is unavailable,
+    # recovery will publish these accepted rows after the broker returns.
     dispatched = 0
-    for event in events:
-        event_dict = {
-            "type": type(event).__name__,   # "MessengerEvent" | "CommentEvent"
-            **event.__dict__,
-        }
-        # Remove non-serialisable raw field from Celery payload
-        event_dict.pop("raw", None)
-        process_fb_webhook.apply_async(
-            args=(event_dict,),
-            headers={"request_id": str(request.state.request_id)[:255]},
-        )
+    for event in inbox.accepted:
+        task_id = str(uuid.uuid4())
+        try:
+            process_fb_webhook.apply_async(
+                args=(str(event.id),),
+                task_id=task_id,
+                headers=correlation_headers(request),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Webhook publish deferred inbox_event=%s error=%s",
+                event.id,
+                type(exc).__name__,
+            )
+            continue
+        await mark_webhook_queued(db, event.id, task_id)
         dispatched += 1
+    await db.commit()
 
     logger.info(
-        "Webhook ingested: %d event(s) dispatched to Celery.", dispatched
+        "Webhook ingested accepted=%d duplicate=%d unregistered=%d queued=%d",
+        len(inbox.accepted),
+        inbox.duplicates,
+        inbox.unregistered,
+        dispatched,
     )
 
     # ── 6. Immediate 200 OK ───────────────────────────────────────────────────
     # This response goes back to Meta in < 250 ms regardless of how long
     # the Celery RAG pipeline takes (Phase A4).
-    return {"status": "ok", "events_queued": dispatched}
+    return {
+        "status": "ok",
+        "events_accepted": len(inbox.accepted),
+        "events_duplicate": inbox.duplicates,
+        "events_unregistered": inbox.unregistered,
+        "events_queued": dispatched,
+    }

@@ -23,6 +23,10 @@ class BackendContractTests(unittest.TestCase):
             "/api/v1/knowledge/{org_id}/embeddings/rebuild",
             "/api/v1/knowledge/{org_id}/embeddings/{entity_type}/{entity_id}/retry",
             "/api/v1/fb/connect",
+            "/api/v1/fb/pages/{page_record_id}/health",
+            "/api/v1/fb/pages/{page_record_id}/reconnect",
+            "/api/v1/fb/pages/{page_record_id}/subscribe",
+            "/api/v1/fb/pages/{page_record_id}/transfer",
             "/api/v1/fb/webhook",
             "/api/v1/resume",
             "/api/v1/resume/{resume_id}/optimize",
@@ -65,6 +69,7 @@ class BackendContractTests(unittest.TestCase):
                 "Resume",
                 "TaskFailure",
                 "User",
+                "WebhookEvent",
             },
         )
 

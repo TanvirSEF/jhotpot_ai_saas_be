@@ -81,12 +81,19 @@ celery_app.conf.update(
     # Routes tasks to the appropriate queue by task name.
     task_routes={
         "process_fb_webhook":  {"queue": "webhooks",   "priority": 9},
+        "recover_fb_webhook_inbox": {"queue": "webhooks", "priority": 9},
         "generate_embeddings": {"queue": "embeddings", "priority": 1},
         "export_resume_pdf":   {"queue": "default",    "priority": 5},
     },
 
     # ── Beat Scheduler ────────────────────────────────────────────────────────
     beat_scheduler="celery.beat:PersistentScheduler",
+    beat_schedule={
+        "recover-meta-webhook-inbox": {
+            "task": "recover_fb_webhook_inbox",
+            "schedule": 60.0,
+        },
+    },
 
     # ── Worker concurrency hint (overridable via CLI) ─────────────────────────
     # Prefer I/O-bound gevent/eventlet for webhook tasks; process pool for CPU.

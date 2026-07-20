@@ -15,6 +15,7 @@ Task registry:
 import asyncio
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 
 from app.worker.celery_app import celery_app
 from app.worker.db import task_db_session as _task_db_session
@@ -241,7 +242,7 @@ _TWENTY_FOUR_HOURS_S = 86_400   # Meta standard messaging window (seconds)
     soft_time_limit=60,
     time_limit=75,
 )
-def process_fb_webhook(self, event_dict: dict) -> dict:
+def process_fb_webhook(self, event_ref: str | dict) -> dict:
     """
     Full RAG + Meta Graph API pipeline for a single classified webhook event.
 
@@ -249,8 +250,8 @@ def process_fb_webhook(self, event_dict: dict) -> dict:
     Each event is processed independently so retries don't affect siblings.
 
     Args:
-        event_dict: Serialised MessengerEvent or CommentEvent dict produced
-                    by webhook_parser.parse_webhook_payload().
+        event_ref: Durable webhook inbox UUID. A normalized event dict remains
+                   accepted temporarily for rolling-deploy compatibility.
 
     Pipeline:
       1. Identify event type (MessengerEvent | CommentEvent)
@@ -267,29 +268,106 @@ def process_fb_webhook(self, event_dict: dict) -> dict:
     Returns:
         Status dict stored in Celery result backend.
     """
+    legacy_event = event_ref if isinstance(event_ref, dict) else None
+    inbox_event_id = None if legacy_event is not None else str(event_ref)
     try:
         logger.info(
-            "Webhook task started task_id=%s request_id=%s type=%s page_id=%s",
+            "Webhook task started task_id=%s request_id=%s inbox_event=%s",
             self.request.id,
             request_id_from_task(self),
-            event_dict.get("type"),
-            event_dict.get("page_id"),
+            inbox_event_id,
         )
-        result = asyncio.run(_run_webhook_pipeline(event_dict))
-        return result
+        if legacy_event is not None:
+            # Rolling-deploy compatibility for tasks published before Phase 7.
+            return asyncio.run(_run_webhook_pipeline(legacy_event))
+        return asyncio.run(_run_inbox_webhook_pipeline(inbox_event_id))
     except Exception as exc:
+        if inbox_event_id:
+            try:
+                asyncio.run(
+                    _mark_inbox_attempt_failed(
+                        inbox_event_id,
+                        retrying=task_will_retry(self, exc),
+                        error_code=type(exc).__name__,
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    "Could not update webhook inbox failure event=%s",
+                    inbox_event_id,
+                )
         retry_or_fail(
             self,
             exc,
             base_delay=5,
             safe_context={
-                "event_type": str(event_dict.get("type", ""))[:50],
-                "page_id": str(event_dict.get("page_id", ""))[:255],
+                "inbox_event_id": inbox_event_id,
+                "legacy_event_type": (
+                    str(legacy_event.get("type", ""))[:50]
+                    if legacy_event
+                    else None
+                ),
             },
         )
 
 
-async def _run_webhook_pipeline(event_dict: dict) -> dict:
+async def _run_inbox_webhook_pipeline(event_id: str) -> dict:
+    """Claim one durable event, run it once, and persist its terminal state."""
+    from app.services.webhook_inbox import (
+        claim_webhook_event,
+        transition_webhook_event,
+    )
+
+    try:
+        parsed_id = uuid.UUID(event_id)
+    except (TypeError, ValueError) as exc:
+        raise PermanentTaskError("Invalid webhook inbox event ID.") from exc
+
+    async with _task_db_session() as db:
+        inbox_event = await claim_webhook_event(db, parsed_id)
+    if inbox_event is None:
+        return {"status": "skipped", "reason": "already_claimed_or_complete"}
+
+    async def mark_delivering() -> None:
+        async with _task_db_session() as db:
+            await transition_webhook_event(db, parsed_id, state="delivering")
+
+    result = await _run_webhook_pipeline(
+        inbox_event.payload,
+        before_delivery=mark_delivering,
+    )
+    terminal_state = "succeeded" if result.get("status") == "ok" else "skipped"
+    async with _task_db_session() as db:
+        await transition_webhook_event(db, parsed_id, state=terminal_state)
+    return {**result, "inbox_event_id": event_id}
+
+
+async def _mark_inbox_attempt_failed(
+    event_id: str,
+    *,
+    retrying: bool,
+    error_code: str,
+) -> None:
+    from app.services.webhook_inbox import transition_webhook_event
+
+    try:
+        parsed_id = uuid.UUID(event_id)
+    except (TypeError, ValueError):
+        return
+    async with _task_db_session() as db:
+        await transition_webhook_event(
+            db,
+            parsed_id,
+            state="retrying" if retrying else "failed",
+            error_code=error_code[:100],
+        )
+
+
+async def _run_webhook_pipeline(
+    event_dict: dict,
+    *,
+    before_delivery: Callable[[], Awaitable[None]] | None = None,
+) -> dict:
     """Async implementation — called from the sync Celery wrapper."""
     import time
     from sqlalchemy import select
@@ -317,6 +395,20 @@ async def _run_webhook_pipeline(event_dict: dict) -> dict:
         if not fb_page.is_bot_active:
             logger.info("Bot is inactive for page=%s — skipping.", page_id)
             return {"status": "skipped", "reason": "bot_inactive"}
+
+        if (
+            fb_page.connection_status != "connected"
+            or fb_page.subscription_status != "subscribed"
+            or fb_page.token_status != "valid"
+        ):
+            logger.warning(
+                "Page lifecycle is not ready page=%s connection=%s subscription=%s token=%s",
+                page_id,
+                fb_page.connection_status,
+                fb_page.subscription_status,
+                fb_page.token_status,
+            )
+            return {"status": "skipped", "reason": "page_not_ready"}
 
         # ── 3. 24-hour messaging window check (Messenger only) ────────────────
         if event_type == "MessengerEvent":
@@ -376,6 +468,11 @@ async def _run_webhook_pipeline(event_dict: dict) -> dict:
         )
 
         # ── 10. Send reply via Meta Graph API ────────────────────────────────
+        # This state is intentionally not auto-recovered. If a worker dies
+        # around the external call, replaying blindly could send two replies.
+        if before_delivery is not None:
+            await before_delivery()
+
         if event_type == "MessengerEvent":
             sender_psid = event_dict.get("sender_id", "")
             await send_messenger_reply(plain_token, sender_psid, ai_reply)
@@ -404,6 +501,47 @@ async def _run_webhook_pipeline(event_dict: dict) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 # export_resume_pdf  (Phase B3)
 # ──────────────────────────────────────────────────────────────────────────────
+
+@celery_app.task(
+    name="recover_fb_webhook_inbox",
+    soft_time_limit=30,
+    time_limit=45,
+)
+def recover_fb_webhook_inbox() -> dict:
+    """Republish committed events left behind by broker or worker failures."""
+    return asyncio.run(_recover_fb_webhook_inbox())
+
+
+async def _recover_fb_webhook_inbox() -> dict:
+    from app.services.webhook_inbox import (
+        mark_webhook_queued,
+        recovery_candidates,
+    )
+
+    async with _task_db_session() as db:
+        candidates = await recovery_candidates(db)
+        queued = 0
+        for event in candidates:
+            task_id = str(uuid.uuid4())
+            headers = {"request_id": event.request_id} if event.request_id else {}
+            try:
+                process_fb_webhook.apply_async(
+                    args=(str(event.id),),
+                    task_id=task_id,
+                    headers=headers,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Webhook inbox recovery publish failed event=%s error=%s",
+                    event.id,
+                    type(exc).__name__,
+                )
+                continue
+            await mark_webhook_queued(db, event.id, task_id)
+            queued += 1
+        await db.commit()
+    return {"status": "ok", "candidates": len(candidates), "queued": queued}
+
 
 @celery_app.task(
     name="export_resume_pdf",

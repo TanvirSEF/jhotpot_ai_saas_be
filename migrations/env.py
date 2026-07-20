@@ -34,6 +34,7 @@ from app.models import (  # noqa: F401
     Resume,
     TaskFailure,
     User,
+    WebhookEvent,
 )
 
 # Register pgvector type comparators so Alembic can autogenerate

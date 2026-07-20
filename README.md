@@ -49,6 +49,15 @@ pgvector, and HNSW indexes.
    celery -A app.worker.celery_app worker -Q webhooks,embeddings,default --loglevel=info
    ```
 
+8. Start one Celery Beat process for durable webhook-inbox recovery:
+
+   ```bash
+   celery -A app.worker.celery_app beat --loglevel=info
+   ```
+
+   Run exactly one Beat scheduler per environment unless you deploy a
+   distributed scheduler with its own leader-election guarantee.
+
 The OpenAPI UI is available at `http://127.0.0.1:8000/docs`.
 
 ## Configuration
@@ -68,7 +77,7 @@ groups are:
 - `/api/v1/auth` — user registration and login
 - `/api/v1/org` — business profiles and operating guidelines
 - `/api/v1/knowledge` — products, FAQs, and semantic search
-- `/api/v1/fb` — Meta OAuth, connected Pages, and webhook ingestion
+- `/api/v1/fb` — Meta OAuth, Page lifecycle/health, subscriptions, and webhook ingestion
 - `/api/v1/resume` — resume CRUD, optimization, and PDF download
 
 Route names may differ from early PRD examples; resource ownership and behavior

@@ -45,6 +45,7 @@ class MessengerEvent:
     A private message sent to the Page inbox (Messenger).
 
     Fields:
+        event_id    : Meta's stable message `mid`, used for deduplication.
         page_id     : The Facebook Page ID that received the message.
         sender_id   : PSID (Page-Scoped User ID) of the message sender.
         recipient_id: Page ID (same as page_id, included for completeness).
@@ -52,6 +53,7 @@ class MessengerEvent:
         timestamp   : Unix ms timestamp from Meta.
         raw         : Original entry dict for debugging / future extensibility.
     """
+    event_id: str
     page_id: str
     sender_id: str
     recipient_id: str
@@ -66,6 +68,7 @@ class CommentEvent:
     A public comment on a Page post (feed subscription).
 
     Fields:
+        event_id    : Meta's stable comment ID, used for deduplication.
         page_id     : The Facebook Page ID that owns the post.
         comment_id  : The Graph API ID of the new comment.
         post_id     : The Graph API ID of the parent post.
@@ -74,6 +77,7 @@ class CommentEvent:
         timestamp   : Unix ms timestamp from Meta.
         raw         : Original change dict for debugging.
     """
+    event_id: str
     page_id: str
     comment_id: str
     post_id: str
@@ -151,6 +155,11 @@ def _parse_messaging_event(
     if not message or message.get("is_echo"):
         return None
 
+    event_id = str(message.get("mid", "")).strip()
+    if not event_id:
+        logger.warning("Messenger event has no provider message ID; skipping.")
+        return None
+
     text = message.get("text", "").strip()
     if not text:
         logger.debug("Messenger event has no text content — skipping.")
@@ -160,6 +169,7 @@ def _parse_messaging_event(
     recipient = messaging.get("recipient", {})
 
     return MessengerEvent(
+        event_id=event_id,
         page_id=page_id,
         sender_id=sender.get("id", ""),
         recipient_id=recipient.get("id", ""),
@@ -197,8 +207,12 @@ def _parse_feed_change(
     # post_id is embedded in comment_id: "<post_id>_<comment_id>"
     comment_id = value.get("comment_id", "")
     post_id = value.get("post_id", "")
+    if not comment_id:
+        logger.warning("Comment event has no provider comment ID; skipping.")
+        return None
 
     return CommentEvent(
+        event_id=comment_id,
         page_id=page_id,
         comment_id=comment_id,
         post_id=post_id,
