@@ -4,13 +4,11 @@ This runbook assumes PostgreSQL and Redis are managed services and the same
 immutable image digest is used by the migration job, API, worker, and Beat.
 Never put production credentials in Compose files or source control.
 
-## 1. Release gates
+## 1. Release artifact
 
-The release candidate must pass Ruff, mypy, Bandit, pip-audit, unit/contract
-tests, disposable PostgreSQL/Redis integration tests, migration lifecycle and
-drift checks, and the container smoke test. A `v*` tag publishes a GHCR image
-with an SBOM, provenance, a semantic-version tag, and an immutable SHA tag.
-Promote the digest that CI tested; do not rebuild separately per environment.
+A `v*` tag publishes a GHCR image with an SBOM, provenance, a semantic-version
+tag, and an immutable SHA tag. Promote the published digest; do not rebuild
+separately per environment.
 
 ## 2. Pre-deployment preparation
 

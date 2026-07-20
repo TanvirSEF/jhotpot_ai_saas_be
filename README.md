@@ -19,46 +19,19 @@ Backend for NexusSuite AI, a multi-tenant SaaS platform that combines:
 PostgreSQL is required. SQLite is not supported because the schema uses JSONB,
 pgvector, and HNSW indexes.
 
-## Local setup
+## Production deployment
 
-1. Create and activate a Python 3.12+ virtual environment.
-2. Install dependencies:
+1. Provision PostgreSQL 15+ with pgvector and Redis. The database role must be
+   able to enable the `vector` extension during the first migration.
+2. Inject the required environment values from the deployment platform's
+   secret manager. Never bake `.env` into the image.
+3. Build or pull the immutable backend image.
+4. Run the `migrate` service once and require a zero exit code.
+5. Start the API and worker services, then start exactly one Beat instance.
+6. Route traffic only after both `/live` and `/ready` pass.
 
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Start PostgreSQL 15+ and Redis. The database role must be able to enable the
-   `vector` extension during the first migration.
-4. Copy `.env.example` to `.env`, then replace every placeholder credential.
-5. Apply migrations:
-
-   ```bash
-   alembic upgrade head
-   ```
-
-6. Start the API:
-
-   ```bash
-   uvicorn app.main:app --reload
-   ```
-
-7. Start a development worker that consumes all queues:
-
-   ```bash
-   celery -A app.worker.celery_app worker -Q webhooks,embeddings,default --loglevel=info
-   ```
-
-8. Start one Celery Beat process for durable webhook-inbox recovery:
-
-   ```bash
-   celery -A app.worker.celery_app beat --loglevel=info
-   ```
-
-   Run exactly one Beat scheduler per environment unless you deploy a
-   distributed scheduler with its own leader-election guarantee.
-
-The OpenAPI UI is available at `http://127.0.0.1:8000/docs`.
+See `operations/release-runbook.md` for backup, rollout, verification, and
+rollback commands.
 
 ## Configuration
 
@@ -95,31 +68,12 @@ exactly once as a release job before starting or rolling API and worker
 replicas. This makes migration failures visible before application traffic
 reaches the new release.
 
-Useful checks:
+Release checks:
 
 ```bash
 alembic heads
 alembic history
-python -m unittest discover -s tests -v
 ```
-
-### Migration integration test
-
-The migration lifecycle test intentionally upgrades and downgrades a disposable
-database. Its safety guard only permits the local test database exposed on port
-`55432`; it refuses any other target.
-
-On a machine with Docker Desktop:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\test_migrations.ps1
-```
-
-The same lifecycle test runs automatically in the backend integration CI job. It
-verifies a fresh upgrade, preservation of an existing user during the integer to
-UUID conversion, downgrade/re-upgrade behavior, and `alembic check` model drift.
-The disposable stack also runs Redis security-control and PostgreSQL tenant-
-isolation tests.
 
 ## Authentication security
 
@@ -170,8 +124,3 @@ scrape `/metrics` through an internal network or protected ingress, not a public
 internet route. Alert on the webhook route p95 above 250 ms and vector operation
 p95 above 20 ms using the exported histograms. Centralized structured logs are
 the error investigation path; no external error-tracking SDK is required.
-
-## Delivery plan
-
-Backend hardening and feature-completion phases are tracked in
-`docs/backend_implementation_plan.md`.

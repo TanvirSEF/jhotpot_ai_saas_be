@@ -12,11 +12,8 @@ __pycache__
 *.log
 venv
 .venv
-tests
 docs
 operations
 scripts
 compose*.yaml
-requirements-dev.txt
-pyproject.toml
 storage/resume_exports

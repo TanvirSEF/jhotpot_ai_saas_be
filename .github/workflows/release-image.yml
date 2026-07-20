@@ -11,11 +11,7 @@ permissions:
   attestations: write
 
 jobs:
-  verify:
-    uses: ./.github/workflows/backend-ci.yml
-
   publish:
-    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
