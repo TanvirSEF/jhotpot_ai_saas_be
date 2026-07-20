@@ -8,7 +8,7 @@ from sqlalchemy.dialects import postgresql
 from app.models import KnowledgeEmbedding, TaskFailure
 from app.services.graph_api import GraphAPIError, _raise_for_reply_error
 from app.worker.celery_app import celery_app
-from app.worker.tasks import generate_embeddings
+from app.worker.tasks import export_resume_pdf, generate_embeddings
 from app.worker.reliability import (
     PermanentTaskError,
     _safe_error_message,
@@ -72,6 +72,7 @@ class WorkerReliabilityTests(unittest.TestCase):
             "generate_embeddings": (45, 60),
             "process_fb_webhook": (60, 75),
             "export_resume_pdf": (90, 120),
+            "recover_resume_exports": (30, 45),
         }
         for task_name, limits in expected.items():
             task = celery_app.tasks[task_name]
@@ -124,6 +125,30 @@ class WorkerReliabilityTests(unittest.TestCase):
         mark_failed.assert_awaited_once_with(
             "product",
             entity_id,
+            "PermanentTaskError",
+        )
+
+    def test_terminal_pdf_failure_updates_durable_export_state(self):
+        export_id = str(uuid.uuid4())
+        failure = PermanentTaskError("invalid resume snapshot")
+        mark_failed = AsyncMock()
+
+        with (
+            patch(
+                "app.worker.tasks._run_export_resume_pdf",
+                AsyncMock(side_effect=failure),
+            ),
+            patch(
+                "app.worker.tasks._mark_resume_export_failed",
+                mark_failed,
+            ),
+            patch("app.worker.tasks.retry_or_fail", side_effect=failure),
+        ):
+            with self.assertRaises(PermanentTaskError):
+                export_resume_pdf.run(export_id)
+
+        mark_failed.assert_awaited_once_with(
+            export_id,
             "PermanentTaskError",
         )
 

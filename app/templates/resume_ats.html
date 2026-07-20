@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>{{ personal_info.full_name }} — Resume</title>
+  <title>{{ personal_info.full_name }} - Resume</title>
   <style>
     @page {
       size: A4;
@@ -99,11 +99,11 @@
     <div class="name">{{ personal_info.full_name }}</div>
     <div class="contact-info">
       {% if personal_info.email %}<span>{{ personal_info.email }}</span>{% endif %}
-      {% if personal_info.phone %}<span class="contact-separator">•</span><span>{{ personal_info.phone }}</span>{% endif %}
-      {% if personal_info.location %}<span class="contact-separator">•</span><span>{{ personal_info.location }}</span>{% endif %}
-      {% if personal_info.linkedin_url %}<span class="contact-separator">•</span><span>{{ personal_info.linkedin_url }}</span>{% endif %}
-      {% if personal_info.github_url %}<span class="contact-separator">•</span><span>{{ personal_info.github_url }}</span>{% endif %}
-      {% if personal_info.portfolio_url %}<span class="contact-separator">•</span><span>{{ personal_info.portfolio_url }}</span>{% endif %}
+      {% if personal_info.phone %}<span class="contact-separator">|</span><span>{{ personal_info.phone }}</span>{% endif %}
+      {% if personal_info.location %}<span class="contact-separator">|</span><span>{{ personal_info.location }}</span>{% endif %}
+      {% if personal_info.linkedin_url %}<span class="contact-separator">|</span><span>{{ personal_info.linkedin_url }}</span>{% endif %}
+      {% if personal_info.github_url %}<span class="contact-separator">|</span><span>{{ personal_info.github_url }}</span>{% endif %}
+      {% if personal_info.portfolio_url %}<span class="contact-separator">|</span><span>{{ personal_info.portfolio_url }}</span>{% endif %}
     </div>
   </div>
 
@@ -118,8 +118,8 @@
   <div class="section-title">Work Experience</div>
   {% for exp in work_experiences %}
   <div class="item-header clearfix">
-    <span class="item-title">{{ exp.role }}</span> — <span class="item-subtitle">{{ exp.company }}{% if exp.location %}, {{ exp.location }}{% endif %}</span>
-    <span class="item-date">{{ exp.start_date }} – {% if exp.is_current %}Present{% elif exp.end_date %}{{ exp.end_date }}{% else %}Present{% endif %}</span>
+    <span class="item-title">{{ exp.role }}</span> - <span class="item-subtitle">{{ exp.company }}{% if exp.location %}, {{ exp.location }}{% endif %}</span>
+    <span class="item-date">{{ exp.start_date }} - {% if exp.is_current %}Present{% elif exp.end_date %}{{ exp.end_date }}{% else %}Present{% endif %}</span>
   </div>
   {% if exp.achievements and exp.achievements|length > 0 %}
   <ul>
@@ -136,9 +136,9 @@
   <div class="section-title">Education</div>
   {% for edu in education %}
   <div class="item-header clearfix">
-    <span class="item-title">{{ edu.degree }}{% if edu.field_of_study %} in {{ edu.field_of_study }}{% endif %}</span> — <span class="item-subtitle">{{ edu.institution }}</span>
+    <span class="item-title">{{ edu.degree }}{% if edu.field_of_study %} in {{ edu.field_of_study }}{% endif %}</span> - <span class="item-subtitle">{{ edu.institution }}</span>
     {% if edu.start_date or edu.end_date %}
-    <span class="item-date">{% if edu.start_date %}{{ edu.start_date }} – {% endif %}{{ edu.end_date }}</span>
+    <span class="item-date">{% if edu.start_date %}{{ edu.start_date }} - {% endif %}{{ edu.end_date }}</span>
     {% endif %}
   </div>
   {% if edu.gpa %}
@@ -162,7 +162,7 @@
   <div class="section-title">Certifications</div>
   {% for cert in certifications %}
   <div class="item-header clearfix">
-    <span class="item-title">{{ cert.name }}</span> — <span class="item-subtitle">{{ cert.issuing_organization }}</span>
+    <span class="item-title">{{ cert.name }}</span> - <span class="item-subtitle">{{ cert.issuing_organization }}</span>
     {% if cert.issue_date %}<span class="item-date">{{ cert.issue_date }}</span>{% endif %}
   </div>
   {% endfor %}

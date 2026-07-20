@@ -84,6 +84,7 @@ celery_app.conf.update(
         "recover_fb_webhook_inbox": {"queue": "webhooks", "priority": 9},
         "generate_embeddings": {"queue": "embeddings", "priority": 1},
         "export_resume_pdf":   {"queue": "default",    "priority": 5},
+        "recover_resume_exports": {"queue": "default", "priority": 5},
     },
 
     # ── Beat Scheduler ────────────────────────────────────────────────────────
@@ -91,6 +92,10 @@ celery_app.conf.update(
     beat_schedule={
         "recover-meta-webhook-inbox": {
             "task": "recover_fb_webhook_inbox",
+            "schedule": 60.0,
+        },
+        "recover-stale-resume-exports": {
+            "task": "recover_resume_exports",
             "schedule": 60.0,
         },
     },

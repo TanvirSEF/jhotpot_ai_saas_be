@@ -13,9 +13,11 @@ Task registry:
 """
 
 import asyncio
+import hashlib
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta, timezone
 
 from app.worker.celery_app import celery_app
 from app.worker.db import task_db_session as _task_db_session
@@ -568,44 +570,187 @@ async def _recover_fb_webhook_inbox() -> dict:
     soft_time_limit=90,
     time_limit=120,
 )
-def export_resume_pdf(self, resume_id: str) -> dict:
+def export_resume_pdf(self, export_id: str) -> dict:
     """
-    Background WeasyPrint PDF compilation pipeline (Phase B3).
-    Fetches resume row, compiles PDF bytes, and returns metadata.
+    Compile, validate, and durably store one immutable resume export snapshot.
     """
     try:
-        result = asyncio.run(_run_export_resume_pdf(resume_id))
+        result = asyncio.run(
+            _run_export_resume_pdf(export_id, task_id=str(self.request.id))
+        )
         return result
     except Exception as exc:
+        if not task_will_retry(self, exc):
+            try:
+                asyncio.run(
+                    _mark_resume_export_failed(export_id, type(exc).__name__)
+                )
+            except Exception:
+                logger.exception(
+                    "Could not mark resume export failed export_id=%s", export_id
+                )
         retry_or_fail(
             self,
             exc,
             base_delay=15,
-            safe_context={"resume_id": resume_id},
+            safe_context={"export_id": export_id},
         )
 
 
-async def _run_export_resume_pdf(resume_id: str) -> dict:
-    """Async wrapper for export_resume_pdf task."""
-    from sqlalchemy import select
-    from app.models import Resume
-    from app.services.pdf_generator import generate_resume_pdf
+async def _run_export_resume_pdf(
+    export_id: str,
+    *,
+    task_id: str | None = None,
+) -> dict:
+    """Advance one export job through processing to a validated ready file."""
+    from pydantic import ValidationError
+    from sqlalchemy import func, select
 
-    resume_uuid = uuid.UUID(resume_id)
+    from app.models import ResumeExport, ResumeExportState
+    from app.services.export_storage import ExportStorageError, get_export_storage
+    from app.services.pdf_generator import PdfGenerationError, generate_validated_resume_pdf
+
+    try:
+        export_uuid = uuid.UUID(export_id)
+    except ValueError as exc:
+        raise PermanentTaskError("Invalid resume export identifier.") from exc
 
     async with _task_db_session() as db:
-        res = await db.execute(select(Resume).where(Resume.id == resume_uuid))
-        resume = res.scalar_one_or_none()
+        result = await db.execute(
+            select(ResumeExport).where(ResumeExport.id == export_uuid)
+        )
+        export = result.scalar_one_or_none()
+        if export is None:
+            raise PermanentTaskError("Resume export does not exist.")
+        if export.state == ResumeExportState.READY.value:
+            return {
+                "status": "ready",
+                "export_id": export_id,
+                "pdf_size_bytes": export.size_bytes,
+                "page_count": export.page_count,
+            }
 
-        if not resume:
-            logger.warning("Resume %s not found for PDF compilation.", resume_id)
-            raise PermanentTaskError("Resume does not exist.")
+        export.state = ResumeExportState.PROCESSING.value
+        export.task_id = task_id
+        export.attempts += 1
+        export.last_error_code = None
+        export.updated_at = func.now()
+        await db.commit()
 
-        data = resume.optimized_json_data or resume.raw_json_data
-        pdf_bytes = generate_resume_pdf(data)
+        try:
+            pdf_bytes, validation = generate_validated_resume_pdf(
+                export.source_json_data
+            )
+            storage_key = (
+                f"{export.user_id}/{export.resume_id}/{export.id}.pdf"
+            )
+            get_export_storage().write(storage_key, pdf_bytes)
+        except (PdfGenerationError, ValidationError) as exc:
+            raise PermanentTaskError("Resume PDF could not be generated safely.") from exc
+        except ExportStorageError:
+            raise
 
+        result = await db.execute(
+            select(ResumeExport).where(ResumeExport.id == export_uuid)
+        )
+        export = result.scalar_one_or_none()
+        if export is None:
+            get_export_storage().delete(storage_key)
+            raise PermanentTaskError("Resume export was deleted during processing.")
+
+        export.state = ResumeExportState.READY.value
+        export.storage_key = storage_key
+        export.size_bytes = len(pdf_bytes)
+        export.sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+        export.page_count = validation.page_count
+        export.selectable_text = True
+        export.last_error_code = None
+        export.finished_at = datetime.now(timezone.utc)
+        await db.commit()
         return {
-            "status": "ok",
-            "resume_id": resume_id,
+            "status": "ready",
+            "export_id": export_id,
             "pdf_size_bytes": len(pdf_bytes),
+            "page_count": validation.page_count,
         }
+
+
+async def _mark_resume_export_failed(export_id: str, error_code: str) -> None:
+    from sqlalchemy import func, update
+
+    from app.models import ResumeExport, ResumeExportState
+
+    try:
+        export_uuid = uuid.UUID(export_id)
+    except ValueError:
+        return
+    async with _task_db_session() as db:
+        await db.execute(
+            update(ResumeExport)
+            .where(
+                ResumeExport.id == export_uuid,
+                ResumeExport.state != ResumeExportState.READY.value,
+            )
+            .values(
+                state=ResumeExportState.FAILED.value,
+                last_error_code=error_code[:100],
+                finished_at=func.now(),
+                updated_at=func.now(),
+            )
+        )
+        await db.commit()
+
+
+@celery_app.task(
+    name="recover_resume_exports",
+    soft_time_limit=30,
+    time_limit=45,
+)
+def recover_resume_exports() -> dict:
+    """Republish stale committed export jobs after broker or worker failures."""
+    return asyncio.run(_recover_resume_exports())
+
+
+async def _recover_resume_exports() -> dict:
+    from sqlalchemy import select
+
+    from app.core.config import settings
+    from app.models import ResumeExport, ResumeExportState
+
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        seconds=settings.RESUME_EXPORT_RECOVERY_SECONDS
+    )
+    async with _task_db_session() as db:
+        result = await db.execute(
+            select(ResumeExport)
+            .where(
+                ResumeExport.state.in_(
+                    [
+                        ResumeExportState.PENDING.value,
+                        ResumeExportState.PROCESSING.value,
+                    ]
+                ),
+                ResumeExport.updated_at < cutoff,
+            )
+            .order_by(ResumeExport.updated_at)
+            .limit(100)
+        )
+        candidates = list(result.scalars().all())
+        queued = 0
+        for export in candidates:
+            task_id = str(uuid.uuid4())
+            try:
+                export_resume_pdf.apply_async(
+                    args=(str(export.id),), task_id=task_id
+                )
+            except Exception:
+                logger.warning(
+                    "Resume export recovery publish failed export_id=%s", export.id
+                )
+                continue
+            export.state = ResumeExportState.PENDING.value
+            export.task_id = task_id
+            export.updated_at = datetime.now(timezone.utc)
+            queued += 1
+        await db.commit()
+    return {"status": "ok", "candidates": len(candidates), "queued": queued}

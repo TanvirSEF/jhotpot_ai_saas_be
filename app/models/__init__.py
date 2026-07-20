@@ -13,6 +13,7 @@ from app.models.embedding_status import (
 )
 from app.models.webhook_event import WebhookEvent
 from app.models.rag_run import RagRun
+from app.models.resume_export import ResumeExport, ResumeExportState
 
 __all__ = [
     "User",
@@ -29,4 +30,6 @@ __all__ = [
     "EmbeddingStatusRecord",
     "WebhookEvent",
     "RagRun",
+    "ResumeExport",
+    "ResumeExportState",
 ]

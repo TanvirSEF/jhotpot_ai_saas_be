@@ -1,138 +1,103 @@
-"""
-AI Resume ATS Optimizer Service — Phase B2
-
-Responsibilities:
-  1. Parse raw candidate resume content and target job description (JD).
-  2. Perform keyword matching (matched keywords vs missing skills).
-  3. Calculate an overall ATS match score (0-100).
-  4. Enhance work experience bullet points using action verbs and metrics.
-  5. Return structured JSON with ats_score, keyword_analysis, and optimized_resume_content.
-"""
+"""Schema-validated ATS resume optimization."""
 
 import json
 import logging
 from typing import Any
 
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
 from app.core.config import settings
+from app.schemas.resume import ResumeContent, ResumeOptimizationResult
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """You are an expert Executive Resume Writer and Applicant Tracking System (ATS) Optimization Specialist.
+_SYSTEM_PROMPT = """You are an expert resume writer and ATS optimization specialist.
 
-Your task is to analyze a candidate's raw resume JSON against a target Job Description (JD) and produce an AI-optimized resume payload with ATS match scoring.
-
-STRICT INSTRUCTIONS:
-1. Extract top required technical skills, hard skills, soft skills, and industry keywords from the target JD.
-2. Evaluate the raw candidate profile against the JD requirements and compute an integer ATS match score from 0 to 100.
-3. Identify matched keywords (present in both) and missing critical keywords (required by JD but missing in resume).
-4. Provide a brief 2-3 sentence optimization_summary explaining key improvements.
-5. Enhance work experience achievement bullet points using strong action verbs (e.g., "Spearheaded", "Engineered", "Optimized", "Architected") and quantifiable impact metrics where applicable. Do NOT invent fake employment history or false degrees.
-6. Return your entire response as a valid JSON object conforming EXACTLY to the following JSON schema:
-
-{
-  "ats_score": <int between 0 and 100>,
-  "keyword_analysis": {
-    "matched_keywords": [<string array>],
-    "missing_keywords": [<string array>],
-    "optimization_summary": "<string>"
-  },
-  "optimized_resume_content": {
-    "personal_info": { ... },
-    "work_experiences": [
-      {
-        "company": "<string>",
-        "role": "<string>",
-        "location": "<string or null>",
-        "start_date": "<string>",
-        "end_date": "<string or null>",
-        "is_current": <bool>,
-        "achievements": [<enhanced achievement bullet strings>]
-      }
-    ],
-    "education": [ ... ],
-    "skill_categories": [
-      {
-        "category_name": "<string>",
-        "skills": [<string array incorporating relevant keywords>]
-      }
-    ],
-    "certifications": [ ... ],
-    "projects": [ ... ]
-  }
-}
+Analyze the candidate resume only against the supplied target job description.
+Return the requested structured result and follow these rules:
+- Compute an integer ATS match score from 0 to 100.
+- List genuinely matched keywords and important missing keywords.
+- Explain the most important improvements in two or three concise sentences.
+- Improve wording with clear action verbs and quantified impact only when the
+  source resume already provides enough facts to support the claim.
+- Never invent employers, roles, dates, degrees, certifications, projects,
+  skills, responsibilities, achievements, or metrics.
+- Preserve every resume section and all required fields in the schema.
 """
+
+
+class ResumeOptimizationError(RuntimeError):
+    """Safe base error for an optimization that must not be persisted."""
+
+
+class ResumeOptimizationProviderError(ResumeOptimizationError):
+    """The model provider failed or refused to return an answer."""
+
+
+class ResumeOptimizationOutputError(ResumeOptimizationError):
+    """The provider response did not satisfy the complete resume contract."""
 
 
 async def optimize_resume_against_jd(
     raw_resume: dict[str, Any],
     target_jd: str,
-) -> dict[str, Any]:
-    """
-    Call OpenAI Chat Completion in JSON mode to optimize *raw_resume*
-    against *target_jd*.
-
-    Args:
-        raw_resume: Candidate raw resume content dict.
-        target_jd:  Raw text of target Job Description.
-
-    Returns:
-        Dict containing ats_score, keyword_analysis, and optimized_resume_content.
-    """
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-
-    user_prompt = f"""TARGET JOB DESCRIPTION:
-{target_jd.strip()}
-
-CANDIDATE RAW RESUME DATA:
-{json.dumps(raw_resume, indent=2)}
-"""
-
-    logger.info("Calling LLM ATS Optimizer (model=%s)", settings.OPENAI_CHAT_MODEL)
+) -> ResumeOptimizationResult:
+    """Return a fully validated optimization or raise without a fallback result."""
+    try:
+        canonical_resume = ResumeContent.model_validate(raw_resume)
+    except ValidationError as exc:
+        raise ResumeOptimizationOutputError(
+            "Stored resume data does not match the canonical schema."
+        ) from exc
 
     try:
-        response = await client.chat.completions.create(
+        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        response = await client.beta.chat.completions.parse(
             model=settings.OPENAI_CHAT_MODEL,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
+                {
+                    "role": "user",
+                    "content": (
+                        "TARGET JOB DESCRIPTION:\n"
+                        f"{target_jd.strip()}\n\n"
+                        "CANDIDATE RAW RESUME DATA:\n"
+                        f"{json.dumps(canonical_resume.model_dump(mode='json'), indent=2)}"
+                    ),
+                },
             ],
-            response_format={"type": "json_object"},
+            response_format=ResumeOptimizationResult,
             temperature=0.2,
-            max_tokens=2500,
+            max_tokens=3000,
         )
-
-        content = response.choices[0].message.content or "{}"
-        parsed = json.loads(content)
-
-        # Ensure fallback fields if keys are missing
-        ats_score = int(parsed.get("ats_score", 70))
-        keyword_analysis = parsed.get(
-            "keyword_analysis",
-            {
-                "matched_keywords": [],
-                "missing_keywords": [],
-                "optimization_summary": "Resume optimized successfully.",
-            },
-        )
-        optimized_content = parsed.get("optimized_resume_content", raw_resume)
-
-        return {
-            "ats_score": ats_score,
-            "keyword_analysis": keyword_analysis,
-            "optimized_resume_content": optimized_content,
-        }
-
     except Exception as exc:
-        logger.error("Resume optimization failed: %s", exc, exc_info=True)
-        # Fallback response on error
-        return {
-            "ats_score": 50,
-            "keyword_analysis": {
-                "matched_keywords": [],
-                "missing_keywords": [],
-                "optimization_summary": f"Optimization encountered an issue: {exc}",
-            },
-            "optimized_resume_content": raw_resume,
-        }
+        logger.warning(
+            "Resume optimization provider call failed error_type=%s",
+            type(exc).__name__,
+        )
+        raise ResumeOptimizationProviderError(
+            "Resume optimization provider is temporarily unavailable."
+        ) from exc
+
+    message = response.choices[0].message
+    if getattr(message, "refusal", None):
+        logger.info("Resume optimization was refused by the model provider.")
+        raise ResumeOptimizationProviderError(
+            "Resume optimization could not be completed for this request."
+        )
+
+    parsed = getattr(message, "parsed", None)
+    if parsed is None:
+        logger.warning("Resume optimization returned no parsed structured output.")
+        raise ResumeOptimizationOutputError(
+            "Resume optimization returned an invalid structured result."
+        )
+
+    try:
+        return ResumeOptimizationResult.model_validate(parsed)
+    except ValidationError as exc:
+        logger.warning("Resume optimization output failed schema validation.")
+        raise ResumeOptimizationOutputError(
+            "Resume optimization returned an invalid structured result."
+        ) from exc

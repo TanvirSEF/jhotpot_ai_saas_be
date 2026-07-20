@@ -1,9 +1,17 @@
 import uuid
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
-class PersonalInfo(BaseModel):
+class StrictSchema(BaseModel):
+    """Reject undeclared fields so every resume representation stays canonical."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class PersonalInfo(StrictSchema):
     full_name: str = Field(..., min_length=1, max_length=255)
     email: EmailStr
     phone: str | None = None
@@ -14,17 +22,17 @@ class PersonalInfo(BaseModel):
     summary: str | None = None
 
 
-class WorkExperience(BaseModel):
+class WorkExperience(StrictSchema):
     company: str = Field(..., min_length=1)
     role: str = Field(..., min_length=1)
     location: str | None = None
     start_date: str = Field(..., description="e.g. 'Jan 2022' or '2022-01'")
     end_date: str | None = Field(None, description="e.g. 'Present' or 'Dec 2023'")
     is_current: bool = False
-    achievements: list[str] = Field(default_factory=list)
+    achievements: list[str] = Field(default_factory=list, max_length=50)
 
 
-class Education(BaseModel):
+class Education(StrictSchema):
     institution: str = Field(..., min_length=1)
     degree: str = Field(..., min_length=1)
     field_of_study: str | None = None
@@ -33,26 +41,26 @@ class Education(BaseModel):
     gpa: str | None = None
 
 
-class SkillCategory(BaseModel):
+class SkillCategory(StrictSchema):
     category_name: str = Field(..., min_length=1)
-    skills: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list, max_length=100)
 
 
-class Certification(BaseModel):
+class Certification(StrictSchema):
     name: str = Field(..., min_length=1)
     issuing_organization: str = Field(..., min_length=1)
     issue_date: str | None = None
     credential_id: str | None = None
 
 
-class Project(BaseModel):
+class Project(StrictSchema):
     title: str = Field(..., min_length=1)
     description: str | None = None
     technologies: list[str] = Field(default_factory=list)
     link: str | None = None
 
 
-class ResumeContent(BaseModel):
+class ResumeContent(StrictSchema):
     personal_info: PersonalInfo
     work_experiences: list[WorkExperience] = Field(default_factory=list)
     education: list[Education] = Field(default_factory=list)
@@ -61,12 +69,12 @@ class ResumeContent(BaseModel):
     projects: list[Project] = Field(default_factory=list)
 
 
-class ResumeCreate(BaseModel):
+class ResumeCreate(StrictSchema):
     title: str = Field(..., min_length=1, max_length=255)
     raw_data: ResumeContent
 
 
-class ResumeUpdate(BaseModel):
+class ResumeUpdate(StrictSchema):
     title: str | None = Field(None, min_length=1, max_length=255)
     raw_data: ResumeContent | None = None
 
@@ -84,19 +92,40 @@ class ResumeOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class OptimizeRequest(BaseModel):
+class OptimizeRequest(StrictSchema):
     target_job_description: str = Field(..., min_length=20)
 
 
-class KeywordAnalysis(BaseModel):
+class KeywordAnalysis(StrictSchema):
     matched_keywords: list[str] = Field(default_factory=list)
     missing_keywords: list[str] = Field(default_factory=list)
     optimization_summary: str
 
 
-class OptimizeResponse(BaseModel):
-    resume_id: uuid.UUID
-    ats_score: int
+class ResumeOptimizationResult(StrictSchema):
+    ats_score: int = Field(..., ge=0, le=100)
     keyword_analysis: KeywordAnalysis
-    optimized_json_data: dict
+    optimized_resume_content: ResumeContent
 
+
+class OptimizeResponse(StrictSchema):
+    resume_id: uuid.UUID
+    ats_score: int = Field(..., ge=0, le=100)
+    keyword_analysis: KeywordAnalysis
+    optimized_json_data: ResumeContent
+
+
+class ResumeExportOut(StrictSchema):
+    id: uuid.UUID
+    resume_id: uuid.UUID
+    state: Literal["pending", "processing", "ready", "failed"]
+    filename: str
+    size_bytes: int | None
+    page_count: int | None
+    selectable_text: bool
+    last_error_code: str | None
+    created_at: datetime
+    updated_at: datetime
+    finished_at: datetime | None
+
+    model_config = ConfigDict(from_attributes=True, extra="forbid")

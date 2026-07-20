@@ -132,4 +132,5 @@ Thumbs.db
 # Local uploads / media
 media/
 uploads/
+storage/resume_exports/
 docs

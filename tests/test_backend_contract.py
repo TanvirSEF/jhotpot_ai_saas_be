@@ -31,6 +31,9 @@ class BackendContractTests(unittest.TestCase):
             "/api/v1/resume",
             "/api/v1/resume/{resume_id}/optimize",
             "/api/v1/resume/{resume_id}/download",
+            "/api/v1/resume/{resume_id}/exports",
+            "/api/v1/resume/{resume_id}/exports/{export_id}",
+            "/api/v1/resume/{resume_id}/exports/{export_id}/download",
         }
 
         self.assertTrue(expected_paths.issubset(paths.keys()))
@@ -71,6 +74,7 @@ class BackendContractTests(unittest.TestCase):
                 "User",
                 "WebhookEvent",
                 "RagRun",
+                "ResumeExport",
             },
         )
 

@@ -83,7 +83,7 @@ groups are:
 - `/api/v1/org` — business profiles and operating guidelines
 - `/api/v1/knowledge` — products, FAQs, and semantic search
 - `/api/v1/fb` — Meta OAuth, Page lifecycle/health, subscriptions, and webhook ingestion
-- `/api/v1/resume` — resume CRUD, optimization, and PDF download
+- `/api/v1/resume` — resume CRUD, strict optimization, and durable PDF exports
 
 Route names may differ from early PRD examples; resource ownership and behavior
 take precedence over matching those example names.
@@ -137,6 +137,19 @@ also registered in Redis and consumed atomically, preventing callback replay.
 WeasyPrint requires native operating-system libraries. When those libraries are
 not available, the application uses the pinned xhtml2pdf fallback. Production
 containers should install and verify the WeasyPrint runtime explicitly.
+
+PDF generation is asynchronous: create a job with
+`POST /api/v1/resume/{resume_id}/exports`, poll
+`GET /api/v1/resume/{resume_id}/exports/{export_id}`, then download a ready file
+from its `/download` child route. The older resume `/download` route serves the
+latest ready export and never compiles inside the API process. Generated files
+must pass A4 page, selectable-text, identity-anchor, and PDF readability checks
+before becoming ready.
+
+`RESUME_EXPORT_STORAGE_PATH` configures the local atomic storage adapter. API
+and worker processes must share that durable path. A multi-host production
+deployment should provide a shared volume or replace this adapter with object
+storage while preserving the same key/read/write/delete contract.
 
 ## Delivery plan
 

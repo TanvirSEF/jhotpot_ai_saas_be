@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -43,6 +44,10 @@ class Settings(BaseSettings):
     RAG_MIN_SIMILARITY: float = Field(default=0.55, ge=0.0, le=1.0)
     RAG_MAX_INPUT_CHARS: int = Field(default=2000, ge=200, le=10000)
     RAG_MAX_CONTEXT_CHARS: int = Field(default=6000, ge=1000, le=20000)
+
+    # Durable local export storage. Production may replace the adapter with S3.
+    RESUME_EXPORT_STORAGE_PATH: Path = Path("storage/resume_exports")
+    RESUME_EXPORT_RECOVERY_SECONDS: int = Field(default=180, ge=60, le=3600)
 
     # ── Meta / Facebook App (Phase A2: OAuth, Phase A3: Webhooks) ───────────
     META_APP_ID: str = ""

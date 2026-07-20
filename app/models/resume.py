@@ -25,6 +25,9 @@ class Resume(Base):
     )
 
     user: Mapped["User"] = relationship("User", back_populates="resumes")
+    exports: Mapped[list["ResumeExport"]] = relationship(
+        "ResumeExport", back_populates="resume", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Resume {self.title}>"
