@@ -1,0 +1,54 @@
+groups:
+  - name: nexussuite-performance
+    rules:
+      - alert: WebhookIngressLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(nexussuite_http_request_duration_seconds_bucket{route="/api/v1/fb/webhook"}[5m])
+            )
+          ) > 0.25
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Meta webhook ingress p95 exceeds the 250 ms PRD target
+
+      - alert: VectorSearchLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(nexussuite_operation_duration_seconds_bucket{component="vector"}[5m])
+            )
+          ) > 0.02
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: pgvector search p95 exceeds the 20 ms PRD target
+
+      - alert: DependencyOperationErrorRateHigh
+        expr: |
+          sum(rate(nexussuite_operations_total{outcome="error"}[10m]))
+          /
+          clamp_min(sum(rate(nexussuite_operations_total[10m])), 0.001)
+          > 0.10
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: More than 10 percent of measured dependency operations are failing
+
+      - alert: ApiServerErrorRateHigh
+        expr: |
+          sum(rate(nexussuite_http_requests_total{status_code=~"5.."}[10m]))
+          /
+          clamp_min(sum(rate(nexussuite_http_requests_total[10m])), 0.001)
+          > 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: API 5xx response rate exceeds 5 percent

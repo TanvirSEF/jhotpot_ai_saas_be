@@ -34,6 +34,7 @@ from celery import Celery
 from kombu import Queue
 
 from app.core.config import settings
+from app.worker import observability as _observability  # noqa: F401
 
 celery_app = Celery(
     "nexussuite",

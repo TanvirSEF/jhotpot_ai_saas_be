@@ -13,6 +13,9 @@ class BackendContractTests(unittest.TestCase):
         paths = app.openapi()["paths"]
 
         expected_paths = {
+            "/live",
+            "/ready",
+            "/health",
             "/api/v1/auth/register",
             "/api/v1/auth/login",
             "/api/v1/org",

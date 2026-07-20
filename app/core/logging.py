@@ -1,32 +1,91 @@
-"""Centralized logging configuration."""
+"""Centralized structured logging with correlation context."""
 
+import json
 import logging
+import os
 import sys
+from datetime import datetime, timezone
 from functools import lru_cache
 
-_LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
-_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+from app.core.config import settings
+from app.core.observability import current_request_id, current_task_id
+
+_EXTRA_FIELDS = (
+    "event",
+    "method",
+    "route",
+    "status_code",
+    "duration_ms",
+    "component",
+    "operation",
+    "outcome",
+)
 
 
-def _configure_root_logger(level: int = logging.INFO) -> None:
-    root = logging.getLogger()
-    if root.handlers:
-        return
+class JsonFormatter(logging.Formatter):
+    """Emit one machine-parseable event without serializing arbitrary objects."""
 
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, object] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "environment": settings.ENVIRONMENT,
+        }
+        request_id = current_request_id()
+        task_id = current_task_id()
+        if request_id:
+            payload["request_id"] = request_id
+        if task_id:
+            payload["task_id"] = task_id
+        for field in _EXTRA_FIELDS:
+            value = getattr(record, field, None)
+            if value is not None:
+                payload[field] = value
+        if record.exc_info:
+            payload["exception_type"] = record.exc_info[0].__name__
+            traceback = record.exc_info[2]
+            while traceback and traceback.tb_next:
+                traceback = traceback.tb_next
+            if traceback:
+                frame = traceback.tb_frame
+                payload["exception_location"] = {
+                    "file": os.path.basename(frame.f_code.co_filename),
+                    "function": frame.f_code.co_name,
+                    "line": traceback.tb_lineno,
+                }
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def configure_logging() -> None:
+    level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)
-    formatter = logging.Formatter(fmt=_LOG_FORMAT, datefmt=_DATE_FORMAT)
-    handler.setFormatter(formatter)
+    if settings.LOG_FORMAT == "json":
+        handler.setFormatter(JsonFormatter())
+    else:
+        handler.setFormatter(
+            logging.Formatter(
+                fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
 
+    root = logging.getLogger()
+    root.handlers.clear()
     root.setLevel(level)
     root.addHandler(handler)
-
-    # Suppress noisy library logging
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    # These libraries can include credential-bearing query strings in access
+    # logs. Application-owned dependency metrics provide the safe signal.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
 
 
-_configure_root_logger()
+configure_logging()
 
 
 @lru_cache(maxsize=None)

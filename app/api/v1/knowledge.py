@@ -43,6 +43,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
+from app.core.observability import observe_operation
 from app.db.session import get_db
 from app.models import (
     EmbeddingEntityType,
@@ -582,22 +583,23 @@ async def semantic_search(
 
     # pgvector cosine distance: <=> operator (lower = closer).
     # We convert to similarity = 1 - distance for human-readable output.
-    rows = await db.execute(
-        select(
-            KnowledgeEmbedding.entity_type,
-            KnowledgeEmbedding.entity_id,
-            KnowledgeEmbedding.content,
-            (
-                1 - KnowledgeEmbedding.embedding.cosine_distance(query_vector)
-            ).label("similarity"),
+    with observe_operation("vector", "diagnostic_search"):
+        rows = await db.execute(
+            select(
+                KnowledgeEmbedding.entity_type,
+                KnowledgeEmbedding.entity_id,
+                KnowledgeEmbedding.content,
+                (
+                    1 - KnowledgeEmbedding.embedding.cosine_distance(query_vector)
+                ).label("similarity"),
+            )
+            .where(
+                KnowledgeEmbedding.org_id == org_id,
+                KnowledgeEmbedding.embedding.is_not(None),
+            )
+            .order_by(KnowledgeEmbedding.embedding.cosine_distance(query_vector))
+            .limit(top_k)
         )
-        .where(
-            KnowledgeEmbedding.org_id == org_id,
-            KnowledgeEmbedding.embedding.is_not(None),
-        )
-        .order_by(KnowledgeEmbedding.embedding.cosine_distance(query_vector))
-        .limit(top_k)
-    )
 
     return [
         SearchResult(

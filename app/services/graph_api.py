@@ -26,6 +26,7 @@ import logging
 import httpx
 
 from app.services.meta import GRAPH_BASE
+from app.core.observability import observe_operation
 
 logger = logging.getLogger(__name__)
 
@@ -86,12 +87,13 @@ async def send_messenger_reply(
     }
 
     async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(
-            f"{GRAPH_BASE}/me/messages",
-            params={"access_token": page_access_token},
-            json=payload,
-        )
-        _raise_for_reply_error(response)
+        with observe_operation("meta", "messenger_reply"):
+            response = await client.post(
+                f"{GRAPH_BASE}/me/messages",
+                params={"access_token": page_access_token},
+                json=payload,
+            )
+            _raise_for_reply_error(response)
 
     data = response.json()
     message_id = data.get("message_id", "unknown")
@@ -127,12 +129,13 @@ async def post_comment_reply(
         raise GraphAPIError(retryable=False)
 
     async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(
-            f"{GRAPH_BASE}/{comment_id}/comments",
-            params={"access_token": page_access_token},
-            json={"message": message_text[:8000]},  # generous limit for comments
-        )
-        _raise_for_reply_error(response)
+        with observe_operation("meta", "comment_reply"):
+            response = await client.post(
+                f"{GRAPH_BASE}/{comment_id}/comments",
+                params={"access_token": page_access_token},
+                json={"message": message_text[:8000]},
+            )
+            _raise_for_reply_error(response)
 
     data = response.json()
     new_comment_id = data.get("id", "unknown")

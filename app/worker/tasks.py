@@ -638,13 +638,17 @@ async def _run_export_resume_pdf(
         await db.commit()
 
         try:
-            pdf_bytes, validation = generate_validated_resume_pdf(
-                export.source_json_data
-            )
+            from app.core.observability import observe_operation
+
+            with observe_operation("pdf", "compile_and_validate"):
+                pdf_bytes, validation = generate_validated_resume_pdf(
+                    export.source_json_data
+                )
             storage_key = (
                 f"{export.user_id}/{export.resume_id}/{export.id}.pdf"
             )
-            get_export_storage().write(storage_key, pdf_bytes)
+            with observe_operation("storage", "resume_export_write"):
+                get_export_storage().write(storage_key, pdf_bytes)
         except (PdfGenerationError, ValidationError) as exc:
             raise PermanentTaskError("Resume PDF could not be generated safely.") from exc
         except ExportStorageError:

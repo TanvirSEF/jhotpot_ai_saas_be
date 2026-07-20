@@ -16,6 +16,7 @@ from functools import lru_cache
 from openai import AsyncOpenAI
 
 from app.core.config import settings
+from app.core.observability import observe_operation
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +47,12 @@ async def get_embedding(text: str) -> list[float]:
     client = _get_client()
     logger.debug("Generating embedding for text (len=%d)", len(text))
 
-    response = await client.embeddings.create(
-        model=_MODEL,
-        input=text,
-        dimensions=_DIMENSIONS,
-    )
+    with observe_operation("openai", "embedding"):
+        response = await client.embeddings.create(
+            model=_MODEL,
+            input=text,
+            dimensions=_DIMENSIONS,
+        )
     return response.data[0].embedding
 
 

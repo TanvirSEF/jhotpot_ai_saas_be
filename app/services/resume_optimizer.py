@@ -8,6 +8,7 @@ from openai import AsyncOpenAI
 from pydantic import ValidationError
 
 from app.core.config import settings
+from app.core.observability import observe_operation
 from app.schemas.resume import ResumeContent, ResumeOptimizationResult
 
 logger = logging.getLogger(__name__)
@@ -53,24 +54,25 @@ async def optimize_resume_against_jd(
 
     try:
         client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        response = await client.beta.chat.completions.parse(
-            model=settings.OPENAI_CHAT_MODEL,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": (
-                        "TARGET JOB DESCRIPTION:\n"
-                        f"{target_jd.strip()}\n\n"
-                        "CANDIDATE RAW RESUME DATA:\n"
-                        f"{json.dumps(canonical_resume.model_dump(mode='json'), indent=2)}"
-                    ),
-                },
-            ],
-            response_format=ResumeOptimizationResult,
-            temperature=0.2,
-            max_tokens=3000,
-        )
+        with observe_operation("openai", "resume_optimization"):
+            response = await client.beta.chat.completions.parse(
+                model=settings.OPENAI_CHAT_MODEL,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            "TARGET JOB DESCRIPTION:\n"
+                            f"{target_jd.strip()}\n\n"
+                            "CANDIDATE RAW RESUME DATA:\n"
+                            f"{json.dumps(canonical_resume.model_dump(mode='json'), indent=2)}"
+                        ),
+                    },
+                ],
+                response_format=ResumeOptimizationResult,
+                temperature=0.2,
+                max_tokens=3000,
+            )
     except Exception as exc:
         logger.warning(
             "Resume optimization provider call failed error_type=%s",

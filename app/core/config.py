@@ -12,6 +12,7 @@ class Settings(BaseSettings):
         "development"
     )
     LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: Literal["json", "text"] = "json"
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
     # NexusSuite relies on PostgreSQL-only features such as JSONB and pgvector.
@@ -48,6 +49,10 @@ class Settings(BaseSettings):
     # Durable local export storage. Production may replace the adapter with S3.
     RESUME_EXPORT_STORAGE_PATH: Path = Path("storage/resume_exports")
     RESUME_EXPORT_RECOVERY_SECONDS: int = Field(default=180, ge=60, le=3600)
+
+    # Observability
+    HEALTHCHECK_TIMEOUT_SECONDS: float = Field(default=2.0, ge=0.1, le=10.0)
+    METRICS_ENABLED: bool = True
 
     # ── Meta / Facebook App (Phase A2: OAuth, Phase A3: Webhooks) ───────────
     META_APP_ID: str = ""

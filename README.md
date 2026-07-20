@@ -151,6 +151,21 @@ and worker processes must share that durable path. A multi-host production
 deployment should provide a shared volume or replace this adapter with object
 storage while preserving the same key/read/write/delete contract.
 
+## Monitoring and health
+
+- `GET /live` is a dependency-free liveness probe.
+- `GET /ready` checks PostgreSQL and Redis with the
+  `HEALTHCHECK_TIMEOUT_SECONDS` bound; `/health` is its compatibility alias.
+- `GET /metrics` exposes Prometheus metrics when `METRICS_ENABLED=true`.
+
+Logs default to newline-delimited JSON (`LOG_FORMAT=json`). Send an optional
+safe `X-Request-ID` header to correlate an API request with its Celery task;
+otherwise the API creates one and returns it in the response. Prometheus must
+scrape `/metrics` through an internal network or protected ingress, not a public
+internet route. Alert on the webhook route p95 above 250 ms and vector operation
+p95 above 20 ms using the exported histograms. Centralized structured logs are
+the error investigation path; no external error-tracking SDK is required.
+
 ## Delivery plan
 
 Backend hardening and feature-completion phases are tracked in

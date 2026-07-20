@@ -30,6 +30,7 @@ import httpx
 from fastapi import HTTPException, status
 
 from app.core.config import settings
+from app.core.observability import observed_async
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +186,7 @@ def build_oauth_url(state: str) -> str:
     return f"{DIALOG_BASE}?{urlencode(params)}"
 
 
+@observed_async("meta", "oauth_code_exchange")
 async def exchange_code_for_user_token(code: str) -> str:
     """
     Exchange the authorization code (from the OAuth callback) for a
@@ -214,6 +216,7 @@ async def exchange_code_for_user_token(code: str) -> str:
         return token
 
 
+@observed_async("meta", "token_upgrade")
 async def upgrade_to_long_lived_token(short_lived_token: str) -> str:
     """
     Exchange a short-lived user token (1-2 hours) for a long-lived token
@@ -244,6 +247,7 @@ async def upgrade_to_long_lived_token(short_lived_token: str) -> str:
         return long_lived
 
 
+@observed_async("meta", "managed_pages")
 async def get_managed_pages(user_token: str) -> list[PageData]:
     """
     Fetch all Facebook Pages the authenticated user manages, along with
@@ -280,6 +284,7 @@ async def get_managed_pages(user_token: str) -> list[PageData]:
     return pages
 
 
+@observed_async("meta", "debug_token")
 async def debug_token(token: str) -> dict:
     """
     Inspect a token's validity, expiry, and granted scopes via the
@@ -297,6 +302,7 @@ async def debug_token(token: str) -> dict:
         return response.json().get("data", {})
 
 
+@observed_async("meta", "subscription_read")
 async def get_page_subscription(
     page_id: str,
     page_access_token: str,
@@ -319,6 +325,7 @@ async def get_page_subscription(
     return PageSubscription(subscribed=False, fields=[])
 
 
+@observed_async("meta", "subscription_write")
 async def subscribe_page_webhooks(
     page_id: str,
     page_access_token: str,
@@ -341,6 +348,7 @@ async def subscribe_page_webhooks(
     return subscription
 
 
+@observed_async("meta", "subscription_delete")
 async def unsubscribe_page_webhooks(
     page_id: str,
     page_access_token: str,

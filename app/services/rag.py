@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.observability import observe_operation
 from app.models import KnowledgeEmbedding
 from app.services.embedding import get_embedding
 
@@ -117,21 +118,22 @@ async def retrieve_context(
     similarity = (
         1 - KnowledgeEmbedding.embedding.cosine_distance(query_vector)
     ).label("similarity")
-    result = await db.execute(
-        select(
-            KnowledgeEmbedding.content,
-            KnowledgeEmbedding.entity_type,
-            KnowledgeEmbedding.entity_id,
-            similarity,
+    with observe_operation("vector", "similarity_search"):
+        result = await db.execute(
+            select(
+                KnowledgeEmbedding.content,
+                KnowledgeEmbedding.entity_type,
+                KnowledgeEmbedding.entity_id,
+                similarity,
+            )
+            .where(
+                KnowledgeEmbedding.org_id == org_id,
+                KnowledgeEmbedding.embedding.is_not(None),
+                similarity >= settings.RAG_MIN_SIMILARITY,
+            )
+            .order_by(similarity.desc())
+            .limit(min(_TOP_K, max(1, int(top_k))))
         )
-        .where(
-            KnowledgeEmbedding.org_id == org_id,
-            KnowledgeEmbedding.embedding.is_not(None),
-            similarity >= settings.RAG_MIN_SIMILARITY,
-        )
-        .order_by(similarity.desc())
-        .limit(min(_TOP_K, max(1, int(top_k))))
-    )
 
     chunks = [
         RetrievedChunk(
@@ -255,16 +257,17 @@ async def generate_reply(
         timeout=45.0,
     )
     try:
-        response = await client.chat.completions.create(
-            model=settings.OPENAI_CHAT_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": customer_message},
-            ],
-            response_format=_RESPONSE_FORMAT,
-            max_tokens=_CHAT_MAX_TOKENS,
-            temperature=_CHAT_TEMPERATURE,
-        )
+        with observe_operation("openai", "rag_completion"):
+            response = await client.chat.completions.create(
+                model=settings.OPENAI_CHAT_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": customer_message},
+                ],
+                response_format=_RESPONSE_FORMAT,
+                max_tokens=_CHAT_MAX_TOKENS,
+                temperature=_CHAT_TEMPERATURE,
+            )
     except (openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError):
         raise
     except openai.APIStatusError as exc:
