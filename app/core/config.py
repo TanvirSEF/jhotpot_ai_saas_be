@@ -1,5 +1,6 @@
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +40,9 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
+    RAG_MIN_SIMILARITY: float = Field(default=0.55, ge=0.0, le=1.0)
+    RAG_MAX_INPUT_CHARS: int = Field(default=2000, ge=200, le=10000)
+    RAG_MAX_CONTEXT_CHARS: int = Field(default=6000, ge=1000, le=20000)
 
     # ── Meta / Facebook App (Phase A2: OAuth, Phase A3: Webhooks) ───────────
     META_APP_ID: str = ""

@@ -12,6 +12,7 @@ from app.models.embedding_status import (
     EmbeddingStatusRecord,
 )
 from app.models.webhook_event import WebhookEvent
+from app.models.rag_run import RagRun
 
 __all__ = [
     "User",
@@ -27,4 +28,5 @@ __all__ = [
     "EmbeddingEntityType",
     "EmbeddingStatusRecord",
     "WebhookEvent",
+    "RagRun",
 ]

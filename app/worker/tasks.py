@@ -335,6 +335,7 @@ async def _run_inbox_webhook_pipeline(event_id: str) -> dict:
     result = await _run_webhook_pipeline(
         inbox_event.payload,
         before_delivery=mark_delivering,
+        webhook_event_id=parsed_id,
     )
     terminal_state = "succeeded" if result.get("status") == "ok" else "skipped"
     async with _task_db_session() as db:
@@ -367,6 +368,7 @@ async def _run_webhook_pipeline(
     event_dict: dict,
     *,
     before_delivery: Callable[[], Awaitable[None]] | None = None,
+    webhook_event_id: uuid.UUID | None = None,
 ) -> dict:
     """Async implementation — called from the sync Celery wrapper."""
     import time
@@ -459,13 +461,23 @@ async def _run_webhook_pipeline(
         )
 
         # ── 7-9. RAG retrieval + LLM generation ──────────────────────────────
-        ai_reply = await run_rag_pipeline(
+        rag_result = await run_rag_pipeline(
             db=db,
             org_id=fb_page.org_id,
             business_name=business_name,
             guidelines=guidelines,
             customer_message=customer_message,
         )
+        if webhook_event_id is not None:
+            from app.services.rag_audit import record_rag_run
+
+            await record_rag_run(
+                db,
+                org_id=fb_page.org_id,
+                webhook_event_id=webhook_event_id,
+                result=rag_result,
+            )
+        ai_reply = rag_result.reply
 
         # ── 10. Send reply via Meta Graph API ────────────────────────────────
         # This state is intentionally not auto-recovered. If a worker dies
@@ -495,6 +507,10 @@ async def _run_webhook_pipeline(
             "page_id": page_id,
             "reply_target": reply_target,
             "reply_length": len(ai_reply),
+            "rag_outcome": rag_result.outcome,
+            "rag_fallback_reason": rag_result.fallback_reason,
+            "rag_prompt_version": rag_result.prompt_version,
+            "rag_total_tokens": rag_result.total_tokens,
         }
 
 

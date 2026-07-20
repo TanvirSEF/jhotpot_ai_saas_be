@@ -70,6 +70,7 @@ class BackendContractTests(unittest.TestCase):
                 "TaskFailure",
                 "User",
                 "WebhookEvent",
+                "RagRun",
             },
         )
 

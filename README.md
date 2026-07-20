@@ -67,6 +67,11 @@ fails early when PostgreSQL, encryption, OpenAI, or Meta credentials are not
 usable. Staging and production additionally require HTTPS URLs and an explicit
 CORS allowlist.
 
+RAG grounding is controlled by `RAG_MIN_SIMILARITY`,
+`RAG_MAX_INPUT_CHARS`, and `RAG_MAX_CONTEXT_CHARS`. Start with the documented
+defaults, then tune similarity only against a representative, labeled retrieval
+evaluation set; lowering it increases answer coverage and hallucination risk.
+
 Never commit `.env`. It is intentionally ignored by Git.
 
 ## API areas
