@@ -53,7 +53,10 @@ def generate_embeddings(self, entity_type: str, entity_id: str) -> dict:
             entity_type, entity_id, exc,
             exc_info=True,
         )
-        raise self.retry(exc=exc)
+        # Exponential backoff: 10s → 20s → 40s
+        # Prevents hammering OpenAI API during rate-limit windows
+        backoff = 10 * (2 ** self.request.retries)
+        raise self.retry(exc=exc, countdown=backoff)
 
 
 async def _run_embedding(entity_type: str, entity_id: str) -> dict:
@@ -143,8 +146,11 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# process_fb_webhook  (Phase A3 / A4 — stub upgraded in next phase)
+# process_fb_webhook  — Full RAG Pipeline (Phase A4)
 # ──────────────────────────────────────────────────────────────────────────────
+
+_TWENTY_FOUR_HOURS_S = 86_400   # Meta standard messaging window (seconds)
+
 
 @celery_app.task(
     name="process_fb_webhook",
@@ -153,18 +159,166 @@ async def _run_embedding(entity_type: str, entity_id: str) -> dict:
     default_retry_delay=5,
     acks_late=True,
 )
-def process_fb_webhook(self, payload: dict) -> dict:
+def process_fb_webhook(self, event_dict: dict) -> dict:
     """
-    Async RAG + Meta Graph API pipeline (Phase A4).
-    Currently enqueues and logs; full implementation in Phase A4.
+    Full RAG + Meta Graph API pipeline for a single classified webhook event.
+
+    Called by the FastAPI webhook endpoint (Phase A3) once per event.
+    Each event is processed independently so retries don't affect siblings.
+
+    Args:
+        event_dict: Serialised MessengerEvent or CommentEvent dict produced
+                    by webhook_parser.parse_webhook_payload().
+
+    Pipeline:
+      1. Identify event type (MessengerEvent | CommentEvent)
+      2. Look up fb_pages row → get org_id, is_bot_active, encrypted token
+      3. Guard: skip if bot is inactive for this page
+      4. Guard: 24-hour messaging window (Messenger only, per PRD §6.2)
+      5. Decrypt Page Access Token
+      6. Fetch org business_name + global_guidelines
+      7. RAG retrieval (pgvector cosine search, top 4 chunks)
+      8. Build system prompt with guardrails
+      9. Call OpenAI LLM (gpt-4o-mini)
+      10. Send reply via Meta Graph API
+
+    Returns:
+        Status dict stored in Celery result backend.
     """
     try:
-        logger.info("Webhook payload received: %s", payload)
-        # Phase A4: RAG retrieval + LLM call + Meta Graph API reply
-        return {"status": "queued", "payload": payload}
+        result = asyncio.run(_run_webhook_pipeline(event_dict))
+        return result
     except Exception as exc:
-        logger.error("process_fb_webhook failed: %s", exc, exc_info=True)
-        raise self.retry(exc=exc)
+        logger.error(
+            "process_fb_webhook failed [type=%s]: %s",
+            event_dict.get("type"), exc,
+            exc_info=True,
+        )
+        # Exponential backoff: 5s → 10s → 20s
+        # Prevents hammering Meta Graph API during transient failures
+        backoff = 5 * (2 ** self.request.retries)
+        raise self.retry(exc=exc, countdown=backoff)
+
+
+async def _run_webhook_pipeline(event_dict: dict) -> dict:
+    """Async implementation — called from the sync Celery wrapper."""
+    import time
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app.core.config import settings
+    from app.core.security import decrypt_token
+    from app.models import FbPage, Organization
+    from app.services.rag import run_rag_pipeline
+    from app.services.graph_api import send_messenger_reply, post_comment_reply
+
+    event_type = event_dict.get("type")
+    page_id = event_dict.get("page_id", "")
+
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    Session = async_sessionmaker(bind=engine, expire_on_commit=False)
+
+    async with Session() as db:
+        # ── 1. Look up the Facebook Page record ──────────────────────────────
+        result = await db.execute(
+            select(FbPage).where(FbPage.page_id == page_id)
+        )
+        fb_page = result.scalar_one_or_none()
+
+        if not fb_page:
+            logger.warning("No fb_pages record found for page_id=%s — skipping.", page_id)
+            return {"status": "skipped", "reason": "page_not_registered"}
+
+        # ── 2. Guard: bot must be active for this page ───────────────────────
+        if not fb_page.is_bot_active:
+            logger.info("Bot is inactive for page=%s — skipping.", page_id)
+            return {"status": "skipped", "reason": "bot_inactive"}
+
+        # ── 3. 24-hour messaging window check (Messenger only) ────────────────
+        if event_type == "MessengerEvent":
+            event_timestamp_ms = event_dict.get("timestamp", 0)
+            elapsed_seconds = time.time() - (event_timestamp_ms / 1000)
+            if elapsed_seconds > _TWENTY_FOUR_HOURS_S:
+                logger.warning(
+                    "24h window expired for page=%s sender=%s (elapsed=%.0fs) — skipping.",
+                    page_id, event_dict.get("sender_id"), elapsed_seconds,
+                )
+                return {"status": "skipped", "reason": "24h_window_expired"}
+
+        # ── 4. Decrypt Page Access Token ──────────────────────────────────────
+        try:
+            plain_token = decrypt_token(fb_page.encrypted_access_token)
+        except Exception as exc:
+            logger.error("Token decryption failed for page=%s: %s", page_id, exc)
+            return {"status": "error", "reason": "token_decryption_failed"}
+
+        # ── 5. Fetch org business name + guidelines ───────────────────────────
+        org_result = await db.execute(
+            select(Organization).where(Organization.id == fb_page.org_id)
+        )
+        org = org_result.scalar_one_or_none()
+
+        if not org:
+            logger.error("Organisation not found for org_id=%s", fb_page.org_id)
+            return {"status": "error", "reason": "org_not_found"}
+
+        business_name = org.business_name
+        guidelines = org.global_guidelines
+
+        # ── 6. Determine customer message text ───────────────────────────────
+        if event_type == "MessengerEvent":
+            customer_message = event_dict.get("message_text", "").strip()
+        elif event_type == "CommentEvent":
+            customer_message = event_dict.get("comment_text", "").strip()
+        else:
+            logger.warning("Unknown event type: %s — skipping.", event_type)
+            return {"status": "skipped", "reason": f"unknown_event_type: {event_type}"}
+
+        if not customer_message:
+            logger.debug("Empty customer message — skipping.")
+            return {"status": "skipped", "reason": "empty_message"}
+
+        logger.info(
+            "RAG pipeline starting [%s] page=%s org=%s query_len=%d",
+            event_type, page_id, org.id, len(customer_message),
+        )
+
+        # ── 7-9. RAG retrieval + LLM generation ──────────────────────────────
+        ai_reply = await run_rag_pipeline(
+            db=db,
+            org_id=fb_page.org_id,
+            business_name=business_name,
+            guidelines=guidelines,
+            customer_message=customer_message,
+        )
+
+        # ── 10. Send reply via Meta Graph API ────────────────────────────────
+        if event_type == "MessengerEvent":
+            sender_psid = event_dict.get("sender_id", "")
+            success = await send_messenger_reply(plain_token, sender_psid, ai_reply)
+            reply_target = f"messenger:{sender_psid}"
+
+        else:  # CommentEvent
+            comment_id = event_dict.get("comment_id", "")
+            success = await post_comment_reply(plain_token, comment_id, ai_reply)
+            reply_target = f"comment:{comment_id}"
+
+        status = "ok" if success else "reply_failed"
+        logger.info(
+            "RAG pipeline complete [%s] page=%s target=%s status=%s",
+            event_type, page_id, reply_target, status,
+        )
+
+        return {
+            "status": status,
+            "event_type": event_type,
+            "page_id": page_id,
+            "reply_target": reply_target,
+            "reply_length": len(ai_reply),
+        }
+
+    await engine.dispose()
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
