@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import openai
 from openai import AsyncOpenAI
+from openai.types.shared_params import ResponseFormatJSONSchema
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -220,7 +221,7 @@ RESPONSE POLICY:
 7. Return only the required structured response."""
 
 
-_RESPONSE_FORMAT = {
+_RESPONSE_FORMAT: ResponseFormatJSONSchema = {
     "type": "json_schema",
     "json_schema": {
         "name": "grounded_customer_reply",

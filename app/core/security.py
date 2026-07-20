@@ -3,9 +3,11 @@
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+
 import bcrypt
 import jwt
 from cryptography.fernet import Fernet, InvalidToken
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)

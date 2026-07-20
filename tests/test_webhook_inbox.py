@@ -17,7 +17,6 @@ from app.services.webhook_inbox import (
     normalized_payload,
 )
 from app.services.webhook_parser import (
-    CommentEvent,
     MessengerEvent,
     parse_webhook_payload,
 )

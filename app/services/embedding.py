@@ -9,8 +9,8 @@ Design decisions:
     pooling handled by the underlying httpx transport).
 """
 
-import logging
 import json
+import logging
 from functools import lru_cache
 
 from openai import AsyncOpenAI

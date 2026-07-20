@@ -95,6 +95,8 @@ class TokenHealth:
 
 
 def _epoch_datetime(value: object) -> datetime | None:
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return None
     try:
         timestamp = int(value or 0)
     except (TypeError, ValueError):
@@ -146,7 +148,9 @@ def _raise_for_meta_error(response: httpx.Response, context: str) -> None:
         data = response.json()
     except ValueError:
         if response.is_error:
-            raise MetaAPIError(context, transient=response.status_code >= 500)
+            raise MetaAPIError(
+                context, transient=response.status_code >= 500
+            ) from None
         return
 
     if "error" in data:

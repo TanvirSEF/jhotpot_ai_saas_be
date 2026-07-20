@@ -94,13 +94,13 @@ async def _run_embedding(
     from sqlalchemy.dialects.postgresql import insert
 
     from app.models import Faq, KnowledgeEmbedding, Organization, Product
+    from app.models.embedding_status import EmbeddingJobState
     from app.services.embedding import (
-        get_embedding,
-        build_product_text,
         build_faq_text,
         build_guideline_text,
+        build_product_text,
+        get_embedding,
     )
-    from app.models.embedding_status import EmbeddingJobState
     from app.services.embedding_status import content_digest, set_embedding_status
 
     entity_uuid = uuid.UUID(entity_id)
@@ -108,67 +108,69 @@ async def _run_embedding(
     async with _task_db_session() as db:
         # ── 1. Fetch source entity ────────────────────────────────────────────
         if entity_type == "product":
-            result = await db.execute(select(Product).where(Product.id == entity_uuid))
-            entity = result.scalar_one_or_none()
-            if not entity:
+            product_result = await db.execute(
+                select(Product).where(Product.id == entity_uuid)
+            )
+            product = product_result.scalar_one_or_none()
+            if not product:
                 raise PermanentTaskError("Embedding source does not exist.")
 
-            org_id = entity.org_id
+            org_id = product.org_id
             text = build_product_text({
-                "name": entity.name,
-                "sku": entity.sku,
-                "category": entity.category,
-                "attributes": entity.attributes,
-                "price": float(entity.price),
-                "stock_status": entity.stock_status.value,
-                "description": entity.description,
+                "name": product.name,
+                "sku": product.sku,
+                "category": product.category,
+                "attributes": product.attributes,
+                "price": float(product.price),
+                "stock_status": product.stock_status.value,
+                "description": product.description,
             })
             metadata = {
-                "product_name": entity.name,
-                "sku": entity.sku,
-                "category": entity.category,
+                "product_name": product.name,
+                "sku": product.sku,
+                "category": product.category,
             }
 
         elif entity_type == "faq":
-            result = await db.execute(select(Faq).where(Faq.id == entity_uuid))
-            entity = result.scalar_one_or_none()
-            if not entity:
+            faq_result = await db.execute(select(Faq).where(Faq.id == entity_uuid))
+            faq = faq_result.scalar_one_or_none()
+            if not faq:
                 raise PermanentTaskError("Embedding source does not exist.")
 
-            org_id = entity.org_id
-            text = build_faq_text(entity.question, entity.answer)
-            metadata = {"question_preview": entity.question[:100]}
+            org_id = faq.org_id
+            text = build_faq_text(faq.question, faq.answer)
+            metadata = {"question_preview": faq.question[:100]}
 
         elif entity_type == "guideline":
-            result = await db.execute(
+            organization_result = await db.execute(
                 select(Organization).where(Organization.id == entity_uuid)
             )
-            entity = result.scalar_one_or_none()
-            if not entity:
+            organization = organization_result.scalar_one_or_none()
+            if not organization:
                 raise PermanentTaskError("Embedding source does not exist.")
 
-            if not entity.global_guidelines or not entity.global_guidelines.strip():
+            if not organization.global_guidelines or not organization.global_guidelines.strip():
                 await db.execute(
                     delete(KnowledgeEmbedding).where(
-                        KnowledgeEmbedding.org_id == entity.id,
+                        KnowledgeEmbedding.org_id == organization.id,
                         KnowledgeEmbedding.entity_type == "guideline",
-                        KnowledgeEmbedding.entity_id == entity.id,
+                        KnowledgeEmbedding.entity_id == organization.id,
                     )
                 )
                 await set_embedding_status(
                     db,
-                    org_id=entity.id,
+                    org_id=organization.id,
                     entity_type="guideline",
-                    entity_id=entity.id,
+                    entity_id=organization.id,
                     state=EmbeddingJobState.NOT_REQUIRED,
                     task_id=task_id,
                 )
                 await db.commit()
                 return {"status": "skipped", "reason": "guideline_is_empty"}
 
-            org_id = entity.id
-            text = build_guideline_text(entity.global_guidelines)
-            metadata = {"business_name": entity.business_name}
+            org_id = organization.id
+            text = build_guideline_text(organization.global_guidelines)
+            metadata = {"business_name": organization.business_name}
 
         else:
             raise PermanentTaskError("Unsupported embedding entity type.")
@@ -282,6 +284,8 @@ def process_fb_webhook(self, event_ref: str | dict) -> dict:
         if legacy_event is not None:
             # Rolling-deploy compatibility for tasks published before Phase 7.
             return asyncio.run(_run_webhook_pipeline(legacy_event))
+        if inbox_event_id is None:
+            raise PermanentTaskError("Webhook inbox event ID is required.")
         return asyncio.run(_run_inbox_webhook_pipeline(inbox_event_id))
     except Exception as exc:
         if inbox_event_id:
@@ -374,12 +378,13 @@ async def _run_webhook_pipeline(
 ) -> dict:
     """Async implementation — called from the sync Celery wrapper."""
     import time
+
     from sqlalchemy import select
 
     from app.core.security import decrypt_token
     from app.models import FbPage, Organization
+    from app.services.graph_api import post_comment_reply, send_messenger_reply
     from app.services.rag import run_rag_pipeline
-    from app.services.graph_api import send_messenger_reply, post_comment_reply
 
     event_type = event_dict.get("type")
     page_id = event_dict.get("page_id", "")
@@ -426,8 +431,11 @@ async def _run_webhook_pipeline(
                 return {"status": "skipped", "reason": "24h_window_expired"}
 
         # ── 4. Decrypt Page Access Token ──────────────────────────────────────
+        encrypted_token = fb_page.encrypted_access_token
+        if not encrypted_token:
+            raise PermanentTaskError("Page has no stored access token.")
         try:
-            plain_token = decrypt_token(fb_page.encrypted_access_token)
+            plain_token = decrypt_token(encrypted_token)
         except Exception as exc:
             logger.error("Token decryption failed for page=%s", page_id)
             raise PermanentTaskError("Stored Page token could not be decrypted.") from exc

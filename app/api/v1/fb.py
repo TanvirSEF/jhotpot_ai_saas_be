@@ -50,15 +50,15 @@ from app.core.security_store import (
 from app.db.session import get_db
 from app.models import FbPage, Organization, User
 from app.services.meta import (
-    MetaAPIError,
     REQUIRED_PAGE_SUBSCRIPTIONS,
     REQUIRED_PAGE_TOKEN_SCOPES,
+    MetaAPIError,
     build_oauth_url,
     debug_token,
     evaluate_token_health,
     exchange_code_for_user_token,
-    get_page_subscription,
     get_managed_pages,
+    get_page_subscription,
     subscribe_page_webhooks,
     unsubscribe_page_webhooks,
     upgrade_to_long_lived_token,
@@ -131,13 +131,13 @@ def _decode_state_token(state: str) -> tuple[uuid.UUID, uuid.UUID, str]:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "OAuth state token has expired. Please try connecting again.",
-        )
+        ) from None
     except (jwt.PyJWTError, KeyError, ValueError) as exc:
         logger.warning("Invalid OAuth state token: %s", exc)
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "Invalid OAuth state. Possible CSRF attempt.",
-        )
+        ) from None
 
 
 # ── Pydantic Schemas ───────────────────────────────────────────────────────────
@@ -480,7 +480,7 @@ async def list_connected_pages(
     org_id: uuid.UUID | None = Query(None, description="Filter by a specific organization."),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[PageOut]:
+) -> list[FbPage]:
     """
     List all Facebook Pages connected to the authenticated user's organizations.
     Optionally filter by a specific org_id.
@@ -495,7 +495,7 @@ async def list_connected_pages(
         query = query.where(FbPage.org_id == org_id)
 
     result = await db.execute(query)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.get("/pages/{page_record_id}", response_model=PageOut)
@@ -503,7 +503,7 @@ async def get_connected_page(
     page_record_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> PageOut:
+) -> FbPage:
     """Get details of a single connected Facebook Page."""
     return await _get_page_for_user(db, page_record_id, current_user)
 
@@ -596,7 +596,7 @@ async def transfer_disconnected_page(
     body: PageTransferRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> PageOut:
+) -> FbPage:
     page = await _get_page_for_user(db, page_record_id, current_user)
     if page.connection_status != "disconnected":
         raise HTTPException(
@@ -894,7 +894,7 @@ async def webhook_ingest(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Malformed JSON body.",
-        )
+        ) from None
 
     # ── 4. Classify events ────────────────────────────────────────────────────
     events = parse_webhook_payload(payload)

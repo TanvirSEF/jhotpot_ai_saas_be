@@ -10,7 +10,6 @@ from pydantic import ValidationError
 from app.api.v1.resume import optimize_resume
 from app.models import ResumeExport
 from app.schemas.resume import (
-    KeywordAnalysis,
     OptimizeRequest,
     ResumeContent,
     ResumeOptimizationResult,

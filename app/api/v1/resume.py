@@ -92,7 +92,7 @@ async def create_resume(
     body: ResumeCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ResumeOut:
+) -> Resume:
     resume = Resume(
         user_id=current_user.id,
         title=body.title,
@@ -111,7 +111,7 @@ async def list_resumes(
     db: AsyncSession = Depends(get_db),
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
-) -> list[ResumeOut]:
+) -> list[Resume]:
     result = await db.execute(
         select(Resume)
         .where(Resume.user_id == current_user.id)
@@ -127,7 +127,7 @@ async def get_resume(
     resume_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ResumeOut:
+) -> Resume:
     return await _get_user_resume(resume_id, current_user, db)
 
 
@@ -137,7 +137,7 @@ async def update_resume(
     body: ResumeUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ResumeOut:
+) -> Resume:
     resume = await _get_user_resume(resume_id, current_user, db)
     if body.title is not None:
         resume.title = body.title
@@ -165,6 +165,8 @@ async def delete_resume(
     )
     storage = get_export_storage()
     for key in result.scalars():
+        if key is None:
+            continue
         try:
             storage.delete(key)
         except ExportStorageError:
@@ -212,7 +214,7 @@ async def create_resume_export(
     request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ResumeExportOut:
+) -> ResumeExport:
     resume = await _get_user_resume(resume_id, current_user, db)
     task_id = str(uuid.uuid4())
     source_kind = "optimized" if resume.optimized_json_data is not None else "raw"
@@ -254,7 +256,7 @@ async def get_resume_export(
     export_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ResumeExportOut:
+) -> ResumeExport:
     return await _get_user_export(resume_id, export_id, current_user, db)
 
 

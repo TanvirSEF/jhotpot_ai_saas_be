@@ -21,7 +21,7 @@ pgvector, and HNSW indexes.
 
 ## Local setup
 
-1. Create and activate a Python 3.11+ virtual environment.
+1. Create and activate a Python 3.12+ virtual environment.
 2. Install dependencies:
 
    ```bash
@@ -90,9 +90,10 @@ take precedence over matching those example names.
 
 ## Database migrations
 
-The application runs migrations during startup for the current development
-workflow. Production deployments should run `alembic upgrade head` as a single
-release job before starting or rolling API replicas.
+The API never mutates the schema during startup. Run `alembic upgrade head`
+exactly once as a release job before starting or rolling API and worker
+replicas. This makes migration failures visible before application traffic
+reaches the new release.
 
 Useful checks:
 
@@ -137,6 +138,10 @@ also registered in Redis and consumed atomically, preventing callback replay.
 WeasyPrint requires native operating-system libraries. When those libraries are
 not available, the application uses the pinned xhtml2pdf fallback. Production
 containers should install and verify the WeasyPrint runtime explicitly.
+
+The production image, Compose reference, CI gates, immutable-image release
+workflow, and backup/rollback procedure are documented in
+`operations/release-runbook.md`.
 
 PDF generation is asynchronous: create a job with
 `POST /api/v1/resume/{resume_id}/exports`, poll

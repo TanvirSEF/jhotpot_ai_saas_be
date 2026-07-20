@@ -11,7 +11,6 @@ from sqlalchemy.engine import make_url
 
 from app.core.config import settings
 
-
 ROOT = Path(__file__).resolve().parents[2]
 RUN_DATABASE_TESTS = os.getenv("RUN_DATABASE_INTEGRATION_TESTS") == "1"
 

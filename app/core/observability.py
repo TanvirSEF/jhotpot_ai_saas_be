@@ -4,7 +4,7 @@ import logging
 import time
 from contextvars import ContextVar, Token
 from functools import wraps
-from typing import Any
+from typing import Any, Literal
 
 from prometheus_client import Counter, Gauge, Histogram
 
@@ -86,7 +86,7 @@ class OperationTimer:
     def set_outcome(self, outcome: str) -> None:
         self.outcome = outcome
 
-    def __exit__(self, exc_type: Any, _exc: Any, _tb: Any) -> bool:
+    def __exit__(self, exc_type: Any, _exc: Any, _tb: Any) -> Literal[False]:
         if exc_type is not None:
             self.outcome = "error"
         duration = max(0.0, time.perf_counter() - self.started)

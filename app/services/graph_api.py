@@ -25,8 +25,8 @@ import logging
 
 import httpx
 
-from app.services.meta import GRAPH_BASE
 from app.core.observability import observe_operation
+from app.services.meta import GRAPH_BASE
 
 logger = logging.getLogger(__name__)
 

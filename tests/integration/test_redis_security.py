@@ -13,7 +13,6 @@ from app.core.security_store import (
     register_oauth_state,
 )
 
-
 RUN_REDIS_TESTS = os.getenv("RUN_REDIS_INTEGRATION_TESTS") == "1"
 
 

@@ -19,27 +19,8 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Validate config, migrate the database, and verify Redis at startup."""
-    import asyncio
-
-    import redis as redis_client
-    from alembic import command
-    from alembic.config import Config
-
+    """Validate process configuration without mutating external dependencies."""
     validate_configuration()
-
-    def run_migrations() -> None:
-        command.upgrade(Config("alembic.ini"), "head")
-
-    await asyncio.get_running_loop().run_in_executor(None, run_migrations)
-    logger.info("Database migrations applied", extra={"event": "migrations_applied"})
-
-    redis = redis_client.from_url(settings.REDIS_URL, socket_connect_timeout=5)
-    try:
-        redis.ping()
-    finally:
-        redis.close()
-    logger.info("Redis connection verified", extra={"event": "redis_verified"})
     logger.info(
         "%s is ready to serve traffic", settings.PROJECT_NAME,
         extra={"event": "application_started"},

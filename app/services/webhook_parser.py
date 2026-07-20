@@ -122,16 +122,16 @@ def parse_webhook_payload(payload: dict) -> list[WebhookEvent]:
 
         # ── Messenger private messages ─────────────────────────────────────────
         for messaging in entry.get("messaging", []):
-            event = _parse_messaging_event(page_id, messaging)
-            if event:
-                events.append(event)
+            messenger_event = _parse_messaging_event(page_id, messaging)
+            if messenger_event:
+                events.append(messenger_event)
 
         # ── Feed / comment events ──────────────────────────────────────────────
         for change in entry.get("changes", []):
             if change.get("field") == "feed":
-                event = _parse_feed_change(page_id, change)
-                if event:
-                    events.append(event)
+                comment_event = _parse_feed_change(page_id, change)
+                if comment_event:
+                    events.append(comment_event)
 
     logger.debug("Parsed %d event(s) from webhook payload.", len(events))
     return events

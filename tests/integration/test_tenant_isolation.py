@@ -17,7 +17,6 @@ from app.core.security import create_access_token
 from app.models import FbPage, Organization, Resume, ResumeExport, User
 from tests.integration.test_migrations import ROOT, _guard_disposable_database
 
-
 RUN_DATABASE_TESTS = os.getenv("RUN_DATABASE_INTEGRATION_TESTS") == "1"
 
 

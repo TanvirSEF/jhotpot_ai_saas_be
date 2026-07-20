@@ -18,8 +18,7 @@ from app.core.observability import (
     reset_task_id,
 )
 from app.middleware.request_id import RequestIDMiddleware, normalize_request_id
-from app.services.health import check_readiness
-from app.services.health import ReadinessResult
+from app.services.health import ReadinessResult, check_readiness
 from app.worker.observability import task_finished, task_started
 
 

@@ -1,10 +1,18 @@
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
+
+if TYPE_CHECKING:
+    from app.models.faq import Faq
+    from app.models.fb_page import FbPage
+    from app.models.knowledge import KnowledgeEmbedding
+    from app.models.product import Product
+    from app.models.user import User
 
 
 class Organization(Base):

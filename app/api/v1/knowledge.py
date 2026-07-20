@@ -154,7 +154,7 @@ async def create_product(
     request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ProductOut:
+) -> Product:
     await _get_owned_org(org_id, current_user, db)
 
     product = Product(
@@ -188,7 +188,7 @@ async def list_products(
     db: AsyncSession = Depends(get_db),
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
-) -> list[ProductOut]:
+) -> list[Product]:
     await _get_owned_org(org_id, current_user, db)
 
     result = await db.execute(
@@ -198,7 +198,7 @@ async def list_products(
         .limit(limit)
         .offset(offset)
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.get("/{org_id}/products/{product_id}", response_model=ProductOut)
@@ -207,7 +207,7 @@ async def get_product(
     product_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ProductOut:
+) -> Product:
     await _get_owned_org(org_id, current_user, db)
 
     result = await db.execute(
@@ -227,7 +227,7 @@ async def update_product(
     request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ProductOut:
+) -> Product:
     await _get_owned_org(org_id, current_user, db)
 
     result = await db.execute(
@@ -313,7 +313,7 @@ async def create_faq(
     request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> FaqOut:
+) -> Faq:
     await _get_owned_org(org_id, current_user, db)
 
     faq = Faq(org_id=org_id, question=body.question, answer=body.answer)
@@ -334,13 +334,13 @@ async def list_faqs(
     org_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[FaqOut]:
+) -> list[Faq]:
     await _get_owned_org(org_id, current_user, db)
 
     result = await db.execute(
         select(Faq).where(Faq.org_id == org_id).order_by(Faq.created_at.desc())
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.get("/{org_id}/faqs/{faq_id}", response_model=FaqOut)
@@ -349,7 +349,7 @@ async def get_faq(
     faq_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> FaqOut:
+) -> Faq:
     await _get_owned_org(org_id, current_user, db)
 
     result = await db.execute(
@@ -369,7 +369,7 @@ async def update_faq(
     request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> FaqOut:
+) -> Faq:
     await _get_owned_org(org_id, current_user, db)
 
     result = await db.execute(
@@ -466,7 +466,7 @@ async def list_embedding_statuses(
     state: EmbeddingJobState | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
-) -> list[EmbeddingStatusOut]:
+) -> list[EmbeddingStatusRecord]:
     await _get_owned_org(org_id, current_user, db)
     statement = select(EmbeddingStatusRecord).where(EmbeddingStatusRecord.org_id == org_id)
     if entity_type is not None:

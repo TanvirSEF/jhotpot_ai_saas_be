@@ -12,7 +12,7 @@ pgvector==0.5.0
 alembic==1.13.1
 
 # encryption
-cryptography==42.0.5
+cryptography==48.0.1
 
 # task queue
 celery[redis]==5.3.6

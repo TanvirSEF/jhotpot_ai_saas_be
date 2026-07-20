@@ -6,12 +6,12 @@ from uuid import uuid4
 
 import httpx
 
-from app.models import FbPage
 from app.api.v1.fb import disconnect_page
+from app.models import FbPage
 from app.services.meta import (
-    MetaAPIError,
     REQUIRED_PAGE_SUBSCRIPTIONS,
     REQUIRED_PAGE_TOKEN_SCOPES,
+    MetaAPIError,
     _raise_for_meta_error,
     evaluate_token_health,
     subscribe_page_webhooks,

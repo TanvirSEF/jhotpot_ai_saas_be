@@ -8,7 +8,6 @@ from sqlalchemy.dialects import postgresql
 from app.models import KnowledgeEmbedding, TaskFailure
 from app.services.graph_api import GraphAPIError, _raise_for_reply_error
 from app.worker.celery_app import celery_app
-from app.worker.tasks import export_resume_pdf, generate_embeddings
 from app.worker.reliability import (
     PermanentTaskError,
     _safe_error_message,
@@ -17,6 +16,7 @@ from app.worker.reliability import (
     is_retryable_exception,
     jittered_backoff,
 )
+from app.worker.tasks import export_resume_pdf, generate_embeddings
 
 
 class WorkerReliabilityTests(unittest.TestCase):
