@@ -28,3 +28,8 @@ email-validator==2.3.0
 # ai / llm
 openai==1.95.1
 
+# pdf & templating
+jinja2==3.1.6
+weasyprint==69.0
+
+

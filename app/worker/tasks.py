@@ -322,7 +322,7 @@ async def _run_webhook_pipeline(event_dict: dict) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# export_resume_pdf  (Phase B stub)
+# export_resume_pdf  (Phase B3)
 # ──────────────────────────────────────────────────────────────────────────────
 
 @celery_app.task(
@@ -333,10 +333,46 @@ async def _run_webhook_pipeline(event_dict: dict) -> dict:
     acks_late=True,
 )
 def export_resume_pdf(self, resume_id: str) -> dict:
-    """WeasyPrint PDF compilation pipeline (Phase B)."""
+    """
+    Background WeasyPrint PDF compilation pipeline (Phase B3).
+    Fetches resume row, compiles PDF bytes, and returns metadata.
+    """
     try:
-        logger.info("PDF export queued for resume: %s", resume_id)
-        return {"status": "queued", "resume_id": resume_id}
+        result = asyncio.run(_run_export_resume_pdf(resume_id))
+        return result
     except Exception as exc:
-        logger.error("export_resume_pdf failed: %s", exc, exc_info=True)
+        logger.error("export_resume_pdf failed [%s]: %s", resume_id, exc, exc_info=True)
         raise self.retry(exc=exc)
+
+
+async def _run_export_resume_pdf(resume_id: str) -> dict:
+    """Async wrapper for export_resume_pdf task."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from app.core.config import settings
+    from app.models import Resume
+    from app.services.pdf_generator import generate_resume_pdf
+
+    resume_uuid = uuid.UUID(resume_id)
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    Session = async_sessionmaker(bind=engine, expire_on_commit=False)
+
+    async with Session() as db:
+        res = await db.execute(select(Resume).where(Resume.id == resume_uuid))
+        resume = res.scalar_one_or_none()
+
+        if not resume:
+            logger.warning("Resume %s not found for PDF compilation.", resume_id)
+            return {"status": "error", "reason": "resume_not_found"}
+
+        data = resume.optimized_json_data or resume.raw_json_data
+        pdf_bytes = generate_resume_pdf(data)
+
+        return {
+            "status": "ok",
+            "resume_id": resume_id,
+            "pdf_size_bytes": len(pdf_bytes),
+        }
+
+    await engine.dispose()
+
