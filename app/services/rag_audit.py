@@ -1,4 +1,4 @@
-"""Persistence boundary for content-free RAG usage and grounding metrics."""
+
 
 import uuid
 
@@ -15,7 +15,7 @@ async def record_rag_run(
     webhook_event_id: uuid.UUID,
     result: RagResult,
 ) -> None:
-    """Record one attempt without storing prompts, messages, sources, or replies."""
+
     db.add(
         RagRun(
             org_id=org_id,

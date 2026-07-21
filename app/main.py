@@ -1,4 +1,4 @@
-"""NexusSuite FastAPI application entry point."""
+
 
 from contextlib import asynccontextmanager
 
@@ -12,14 +12,14 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.startup_checks import validate_configuration
 from app.middleware.request_id import RequestIDMiddleware
-from app.models import User  # noqa: F401 - register SQLAlchemy models
+from app.models import User  # noqa: F401
 
 logger = get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Validate process configuration without mutating external dependencies."""
+
     validate_configuration()
     logger.info(
         "%s is ready to serve traffic", settings.PROJECT_NAME,
@@ -33,8 +33,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title=settings.PROJECT_NAME, version="1.0.0", lifespan=lifespan)
 
-# Starlette evaluates middleware in reverse registration order. CORS is added
-# first so RequestIDMiddleware remains the outer observability boundary.
+
 if settings.BACKEND_CORS_ORIGINS:
     app.add_middleware(
         CORSMiddleware,
@@ -53,7 +52,7 @@ def index() -> dict[str, str]:
 
 @app.get("/live", tags=["monitoring"], summary="Process liveness")
 async def liveness() -> dict[str, str]:
-    """Return immediately; dependency failures must not trigger restarts."""
+
     return {"status": "alive", "version": "1.0.0"}
 
 
@@ -73,19 +72,19 @@ async def _readiness_response() -> JSONResponse:
 
 @app.get("/ready", tags=["monitoring"], summary="Dependency readiness")
 async def readiness() -> JSONResponse:
-    """Probe PostgreSQL and Redis with strict time bounds."""
+
     return await _readiness_response()
 
 
 @app.get("/health", tags=["monitoring"], summary="Compatibility readiness check")
 async def health() -> JSONResponse:
-    """Backward-compatible alias for readiness checks."""
+
     return await _readiness_response()
 
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics() -> Response:
-    """Expose Prometheus text metrics without application payload data."""
+
     if not settings.METRICS_ENABLED:
         return Response(status_code=404)
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

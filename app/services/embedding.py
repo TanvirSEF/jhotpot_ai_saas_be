@@ -1,13 +1,5 @@
-"""
-Embedding service — wraps OpenAI text-embedding-3-small.
 
-Design decisions:
-  - Async-first: uses httpx via the official openai async client.
-  - Single public function `get_embedding()` keeps callers simple.
-  - 1 536-dimension output matches PRD §4 and the pgvector column definition.
-  - The client is lazily instantiated and reused across requests (connection
-    pooling handled by the underlying httpx transport).
-"""
+
 
 import json
 import logging
@@ -26,20 +18,14 @@ _DIMENSIONS = 1536
 
 @lru_cache(maxsize=1)
 def _get_client() -> AsyncOpenAI:
-    """Return a lazily constructed, module-level async OpenAI client."""
-    # Celery owns the retry schedule; disabling SDK retries avoids multiplying
-    # attempts across two independent retry layers.
+
+
     return AsyncOpenAI(api_key=settings.OPENAI_API_KEY, max_retries=0, timeout=30.0)
 
 
 async def get_embedding(text: str) -> list[float]:
-    """
-    Generate a 1 536-dim embedding vector for *text*.
 
-    Raises:
-        openai.OpenAIError: propagated to the caller for retry handling.
-        ValueError: if *text* is empty after stripping whitespace.
-    """
+
     text = text.strip()
     if not text:
         raise ValueError("Cannot embed an empty string.")
@@ -57,12 +43,8 @@ async def get_embedding(text: str) -> list[float]:
 
 
 def build_product_text(product_data: dict) -> str:
-    """
-    Serialize a product dict to a single plain-text blob for embedding.
 
-    Keeping a deterministic serialization format ensures consistent vector
-    similarity when the same field is updated.
-    """
+
     parts = [
         f"Product: {product_data.get('name', '')}",
         f"SKU: {product_data.get('sku', 'N/A')}",
@@ -80,10 +62,10 @@ def build_product_text(product_data: dict) -> str:
 
 
 def build_faq_text(question: str, answer: str) -> str:
-    """Serialize an FAQ pair to a plain-text blob for embedding."""
+
     return f"Q: {question.strip()}\nA: {answer.strip()}"
 
 
 def build_guideline_text(guidelines: str) -> str:
-    """Wrap business guidelines for embedding."""
+
     return f"Business Guidelines:\n{guidelines.strip()}"

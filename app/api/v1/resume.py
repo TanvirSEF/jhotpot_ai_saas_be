@@ -1,4 +1,4 @@
-"""Tenant-owned resume optimization and durable PDF export API."""
+
 
 import logging
 import re
@@ -277,7 +277,7 @@ async def download_resume_pdf(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
-    """Download the newest validated export; compilation never runs in the API."""
+
     await _get_user_resume(resume_id, current_user, db)
     result = await db.execute(
         select(ResumeExport)

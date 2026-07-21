@@ -85,8 +85,8 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ):
     email = str(body.email).strip().lower()
-    # Apply the limit before database work to reduce account enumeration and
-    # password-hashing pressure during abusive traffic.
+
+
     await _enforce_auth_limit(request, "register", email)
     exists = await db.scalar(select(User).where(User.email == email))
     if exists:

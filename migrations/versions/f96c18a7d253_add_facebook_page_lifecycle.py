@@ -1,9 +1,5 @@
-"""Add explicit Facebook Page connection lifecycle state.
 
-Revision ID: f96c18a7d253
-Revises: e85b7f31c642
-Create Date: 2026-07-20 18:00:00.000000
-"""
+
 
 from typing import Sequence, Union
 
@@ -36,7 +32,7 @@ def upgrade() -> None:
     op.add_column("fb_pages", sa.Column("last_error_code", sa.String(100), nullable=True))
     op.add_column("fb_pages", sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False))
     op.add_column("fb_pages", sa.Column("disconnected_at", sa.DateTime(timezone=True), nullable=True))
-    # Legacy rows have not passed the new token and subscription checks yet.
+
     op.execute("UPDATE fb_pages SET is_bot_active = false")
     op.create_check_constraint("ck_fb_pages_connection_status", "fb_pages", "connection_status IN ('connected', 'needs_reauth', 'disconnected')")
     op.create_check_constraint("ck_fb_pages_subscription_status", "fb_pages", "subscription_status IN ('pending', 'subscribed', 'failed', 'unsubscribed')")

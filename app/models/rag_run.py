@@ -17,7 +17,7 @@ from app.db.session import Base
 
 
 class RagRun(Base):
-    """Content-free operational metrics for one grounded response attempt."""
+
 
     __tablename__ = "rag_runs"
 

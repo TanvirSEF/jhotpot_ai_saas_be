@@ -1,4 +1,4 @@
-"""Grounded, bounded RAG generation for Facebook customer replies."""
+
 
 import json
 import logging
@@ -90,7 +90,7 @@ class RagResult:
 
 
 def normalize_customer_message(message: str) -> str:
-    """Remove control characters, normalize whitespace, and enforce the budget."""
+
     printable = "".join(
         character
         for character in str(message)
@@ -100,7 +100,7 @@ def normalize_customer_message(message: str) -> str:
 
 
 def contains_prompt_injection(message: str) -> bool:
-    """Detect high-confidence attempts to replace or expose system policy."""
+
     return any(pattern.search(message) for pattern in _INJECTION_PATTERNS)
 
 
@@ -110,7 +110,7 @@ async def retrieve_context(
     query_text: str,
     top_k: int = _TOP_K,
 ) -> list[RetrievedChunk]:
-    """Return only tenant-owned chunks meeting the configured relevance floor."""
+
     bounded_query = normalize_customer_message(query_text)
     if not bounded_query:
         return []
@@ -156,7 +156,7 @@ async def retrieve_context(
 
 
 def bound_context(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
-    """Apply per-source and total character budgets without splitting metadata."""
+
     remaining = settings.RAG_MAX_CONTEXT_CHARS
     bounded: list[RetrievedChunk] = []
     for chunk in chunks[:_TOP_K]:
@@ -185,7 +185,7 @@ def build_system_prompt(
     guidelines: str | None,
     context_chunks: list[RetrievedChunk],
 ) -> str:
-    """Build a versioned prompt that separates policy from untrusted data."""
+
     safe_business_name = _escape_data(" ".join(business_name.split())[:200])
     safe_guidelines = _escape_data(
         " ".join((guidelines or "").split())[:_MAX_GUIDELINE_CHARS]
@@ -251,7 +251,7 @@ async def generate_reply(
     system_prompt: str,
     customer_message: str,
 ) -> GenerationResult:
-    """Generate a strict, machine-validatable answer and capture token usage."""
+
     client = AsyncOpenAI(
         api_key=settings.OPENAI_API_KEY,
         max_retries=0,
@@ -319,7 +319,7 @@ def validate_grounded_answer(
     generation: GenerationResult,
     chunks: list[RetrievedChunk],
 ) -> str | None:
-    """Return a fallback reason when structured output is not safely grounded."""
+
     if not generation.can_answer:
         return generation.failure_reason or "model_declined"
     if not generation.answer:
@@ -379,7 +379,7 @@ async def run_rag_pipeline(
     guidelines: str | None,
     customer_message: str,
 ) -> RagResult:
-    """Retrieve, generate, validate, and return a fully auditable RAG result."""
+
     message = normalize_customer_message(customer_message)
     if not message:
         return _fallback_result("empty_input")

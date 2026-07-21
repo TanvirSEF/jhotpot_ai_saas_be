@@ -1,4 +1,4 @@
-"""ATS-friendly resume HTML rendering, PDF compilation, and validation."""
+
 
 import io
 import logging
@@ -21,7 +21,7 @@ _env = Environment(
 
 
 class PdfGenerationError(RuntimeError):
-    """The renderer could not produce a valid ATS PDF."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ class PdfValidationResult:
 
 
 def render_resume_html(resume_data: dict[str, Any]) -> str:
-    """Validate canonical data and render the resume HTML template."""
+
     content = ResumeContent.model_validate(resume_data)
     return _env.get_template("resume_ats.html").render(
         **content.model_dump(mode="json")
@@ -39,7 +39,7 @@ def render_resume_html(resume_data: dict[str, Any]) -> str:
 
 
 def generate_resume_pdf(resume_data: dict[str, Any]) -> bytes:
-    """Compile canonical resume data into an A4 PDF byte stream."""
+
     rendered_html = render_resume_html(resume_data)
     logger.info("Compiling resume PDF html_length=%d", len(rendered_html))
 
@@ -79,7 +79,7 @@ def validate_resume_pdf(
     *,
     expected_text: tuple[str, ...] = (),
 ) -> PdfValidationResult:
-    """Prove that a PDF has pages and selectable, non-empty text on every page."""
+
     try:
         reader = PdfReader(io.BytesIO(pdf_bytes), strict=False)
         pages = list(reader.pages)
@@ -115,7 +115,7 @@ def validate_resume_pdf(
 def generate_validated_resume_pdf(
     resume_data: dict[str, Any],
 ) -> tuple[bytes, PdfValidationResult]:
-    """Compile and validate a PDF before it can be marked ready."""
+
     content = ResumeContent.model_validate(resume_data)
     pdf_bytes = generate_resume_pdf(content.model_dump(mode="json"))
     validation = validate_resume_pdf(

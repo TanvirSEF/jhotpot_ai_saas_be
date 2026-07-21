@@ -1,9 +1,5 @@
-"""Add knowledge embedding lifecycle tracking.
 
-Revision ID: e85b7f31c642
-Revises: d74e2d9f4a10
-Create Date: 2026-07-20 16:00:00.000000
-"""
+
 
 from typing import Sequence, Union
 
@@ -42,8 +38,7 @@ def upgrade() -> None:
     op.create_index("ix_embedding_statuses_state", "embedding_statuses", ["state"], unique=False)
     op.create_index("ix_embedding_statuses_task_id", "embedding_statuses", ["task_id"], unique=False)
 
-    # Backfill every source, including legacy records that never received a
-    # vector. Operators can discover the explicit `missing` state and rebuild.
+
     op.execute(
         """
         INSERT INTO embedding_statuses (

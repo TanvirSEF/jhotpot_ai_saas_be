@@ -1,9 +1,5 @@
-"""Add content-free RAG grounding and usage metrics.
 
-Revision ID: b82e4d17a930
-Revises: a71d9c42e810
-Create Date: 2026-07-20 22:00:00.000000
-"""
+
 
 from typing import Sequence, Union
 

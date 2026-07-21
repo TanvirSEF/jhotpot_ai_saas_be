@@ -1,23 +1,5 @@
-"""
-Startup configuration validator — Phase A5
 
-Runs at application boot (inside lifespan) BEFORE the server starts
-accepting traffic. Any critical misconfiguration immediately raises
-RuntimeError so the process exits with a clear error message rather than
-failing silently at runtime.
 
-Check categories:
-  CRITICAL — app cannot function; raises RuntimeError → process exits
-  WARNING  — degraded functionality; logs a warning but continues
-
-Checks performed:
-  1. PostgreSQL is configured with the asyncpg driver
-  2. SECRET_KEY is non-placeholder and sufficiently long
-  3. FERNET_KEY is a syntactically valid Fernet key
-  4. OPENAI_API_KEY is present and non-placeholder
-  5. META_APP_ID and META_APP_SECRET are present
-  6. Production URLs and CORS policy are safe
-"""
 
 import logging
 
@@ -27,7 +9,7 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# ── Placeholder sentinels ──────────────────────────────────────────────────────
+
 _PLACEHOLDER_SECRETS = {"change-me", "", "secret", "changeme"}
 _PLACEHOLDER_OPENAI  = {"", "sk-your-openai-api-key-here", "your-openai-api-key"}
 _PLACEHOLDER_META    = {"", "your-meta-app-id", "your-meta-app-secret"}
@@ -40,21 +22,12 @@ _POSTGRESQL_ASYNC_PREFIX = "postgresql+asyncpg://"
 
 
 def validate_configuration() -> None:
-    """
-    Validate all critical application settings.
 
-    Call this inside the FastAPI lifespan context manager so the process
-    refuses to start with an actionable error message rather than crashing
-    later with a cryptic exception.
 
-    Raises:
-        RuntimeError: If any CRITICAL check fails. Message lists all issues
-                      so the operator can fix them all at once.
-    """
     critical: list[str] = []
     warnings: list[str] = []
 
-    # ── 1. Database ───────────────────────────────────────────────────────────
+
     if not settings.DATABASE_URL.startswith(_POSTGRESQL_ASYNC_PREFIX):
         critical.append(
             "DATABASE_URL must use PostgreSQL with the asyncpg driver "
@@ -62,7 +35,7 @@ def validate_configuration() -> None:
             "the application uses JSONB, pgvector, and HNSW indexes."
         )
 
-    # ── 2. SECRET_KEY ─────────────────────────────────────────────────────────
+
     if settings.SECRET_KEY.lower() in _PLACEHOLDER_SECRETS:
         critical.append(
             "SECRET_KEY is set to a default/placeholder value. "
@@ -80,7 +53,7 @@ def validate_configuration() -> None:
     if settings.ACCESS_TOKEN_EXPIRE_MINUTES <= 0:
         critical.append("ACCESS_TOKEN_EXPIRE_MINUTES must be greater than zero.")
 
-    # ── 3. FERNET_KEY ─────────────────────────────────────────────────────────
+
     if settings.FERNET_KEY.lower() in _PLACEHOLDER_SECRETS:
         critical.append(
             "FERNET_KEY is set to a default/placeholder value. "
@@ -95,7 +68,7 @@ def validate_configuration() -> None:
                 "(must be a URL-safe base64-encoded 32-byte key)."
             )
 
-    # ── 4. OPENAI_API_KEY ─────────────────────────────────────────────────────
+
     if settings.OPENAI_API_KEY in _PLACEHOLDER_OPENAI:
         critical.append(
             "OPENAI_API_KEY is not configured. "
@@ -103,7 +76,7 @@ def validate_configuration() -> None:
             "Get yours at: https://platform.openai.com/api-keys"
         )
 
-    # ── 5. Meta App credentials ───────────────────────────────────────────────
+
     if settings.META_APP_ID in _PLACEHOLDER_META:
         critical.append(
             "META_APP_ID is not configured. "
@@ -124,7 +97,7 @@ def validate_configuration() -> None:
             "META_VERIFY_TOKEN must be a private value of at least 16 characters."
         )
 
-    # ── 6. Environment-specific URL and CORS policy ───────────────────────────
+
     if settings.BACKEND_CORS_ORIGINS == ["*"]:
         message = (
             "BACKEND_CORS_ORIGINS cannot use '*' outside local development. "
@@ -152,7 +125,7 @@ def validate_configuration() -> None:
         if value <= 0:
             critical.append(f"{name} must be greater than zero.")
 
-    # ── Report ────────────────────────────────────────────────────────────────
+
     for warning in warnings:
         logger.warning("[Config Warning] %s", warning)
 

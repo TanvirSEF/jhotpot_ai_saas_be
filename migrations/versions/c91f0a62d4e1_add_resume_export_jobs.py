@@ -1,9 +1,5 @@
-"""Add durable resume PDF export jobs.
 
-Revision ID: c91f0a62d4e1
-Revises: b82e4d17a930
-Create Date: 2026-07-20 23:00:00.000000
-"""
+
 
 from typing import Sequence, Union
 

@@ -1,4 +1,4 @@
-"""Atomic state transitions for knowledge-base embedding generation."""
+
 
 import hashlib
 import uuid
@@ -26,7 +26,7 @@ async def set_embedding_status(
     content_hash: str | None = None,
     error_code: str | None = None,
 ) -> None:
-    """Upsert one state transition without creating duplicate status rows."""
+
     insert_attempts = 1 if state is EmbeddingJobState.PROCESSING else 0
     statement = insert(EmbeddingStatusRecord).values(
         id=uuid.uuid4(),
@@ -87,7 +87,7 @@ async def mark_embedding_failed(
     entity_id: str,
     error_code: str,
 ) -> None:
-    """Mark a terminal task failure without storing provider error details."""
+
     try:
         entity_uuid = uuid.UUID(entity_id)
     except ValueError:

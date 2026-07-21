@@ -1,9 +1,5 @@
-"""Add the durable, idempotent Meta webhook inbox.
 
-Revision ID: a71d9c42e810
-Revises: f96c18a7d253
-Create Date: 2026-07-20 20:00:00.000000
-"""
+
 
 from typing import Sequence, Union
 

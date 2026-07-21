@@ -1,4 +1,4 @@
-"""Shared retry policy, correlation helpers, and final-failure persistence."""
+
 
 import asyncio
 import logging
@@ -23,11 +23,11 @@ _RETRYABLE_HTTP_STATUSES = {408, 409, 425, 429}
 
 
 class PermanentTaskError(RuntimeError):
-    """A safe, expected task failure that must not be retried."""
+    pass
 
 
 def is_retryable_exception(exc: BaseException) -> bool:
-    """Return whether another attempt can reasonably succeed unchanged."""
+
     if isinstance(exc, PermanentTaskError):
         return False
     if isinstance(
@@ -54,14 +54,13 @@ def is_retryable_exception(exc: BaseException) -> bool:
         status = exc.response.status_code
         return status in _RETRYABLE_HTTP_STATUSES or status >= 500
 
-    # Service-specific exceptions can expose a narrow retry contract without
-    # coupling this module to every integration package.
+
     retryable = getattr(exc, "retryable", None)
     return retryable is True
 
 
 def jittered_backoff(base_seconds: int, retry_number: int) -> int:
-    """Full-jitter exponential delay, capped at five minutes."""
+
     ceiling = min(300, base_seconds * (2 ** max(0, retry_number)))
     return max(1, round(random.uniform(0.5 * ceiling, ceiling)))
 
@@ -79,7 +78,7 @@ def task_will_retry(task: Any, exc: BaseException) -> bool:
 
 
 def correlation_headers(request: Any) -> dict[str, str]:
-    """Build JSON-safe Celery headers from a FastAPI request."""
+
     request_id = getattr(getattr(request, "state", None), "request_id", None)
     return {"request_id": str(request_id)[:255]} if request_id else {}
 
@@ -98,7 +97,7 @@ def _safe_error_message(exc: BaseException) -> str:
 
 
 def _sanitize_context(context: dict[str, Any]) -> dict[str, str | int | bool | None]:
-    """Keep only scalar operational identifiers and bound their storage size."""
+
     sanitized: dict[str, str | int | bool | None] = {}
     for key, value in context.items():
         safe_key = str(key)[:100]
@@ -118,7 +117,7 @@ async def record_final_failure(
     exc: BaseException,
     retries: int,
 ) -> None:
-    """Insert a sanitized failure once; duplicate delivery stays idempotent."""
+
     async with task_db_session() as db:
         statement = insert(TaskFailure).values(
             id=uuid.uuid4(),
@@ -143,7 +142,7 @@ def retry_or_fail(
     base_delay: int,
     safe_context: dict[str, Any],
 ) -> NoReturn:
-    """Retry a transient error or durably record the terminal failure."""
+
     retries = int(getattr(task.request, "retries", 0) or 0)
     max_retries = int(task.max_retries or 0)
     request_id = request_id_from_task(task)
@@ -176,8 +175,8 @@ def retry_or_fail(
             )
         )
     except Exception:
-        # The primary dependency may be the database itself. Never hide the
-        # original task exception when the audit write is also unavailable.
+
+
         logger.exception("Could not persist final task failure task_id=%s", task_id)
 
     logger.error(

@@ -1,4 +1,4 @@
-"""Storage abstraction for durable generated resume exports."""
+
 
 import os
 import tempfile
@@ -8,13 +8,13 @@ from app.core.config import settings
 
 
 class ExportStorageError(RuntimeError):
-    """A resume export could not be safely stored or retrieved."""
+
 
     retryable = True
 
 
 class LocalExportStorage:
-    """Atomic local-disk storage; replaceable by an object-storage adapter."""
+
 
     def __init__(self, root: Path | None = None) -> None:
         self.root = (root or settings.RESUME_EXPORT_STORAGE_PATH).resolve()

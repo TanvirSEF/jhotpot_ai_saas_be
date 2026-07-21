@@ -1,13 +1,9 @@
-# ─────────────────────────────────────────────
-# Python
-# ─────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
 
-# Distribution / packaging
 build/
 develop-eggs/
 dist/
@@ -26,7 +22,6 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Virtual environments
 .venv/
 venv/
 env/
@@ -34,14 +29,10 @@ ENV/
 env.bak/
 venv.bak/
 
-# Package managers
 poetry.lock
 Pipfile.lock
 pip-wheel-metadata/
 
-# ─────────────────────────────────────────────
-# Environment & secrets
-# ─────────────────────────────────────────────
 .env
 .env.*
 !.env.example
@@ -49,9 +40,6 @@ pip-wheel-metadata/
 *.key
 secrets.json
 
-# ─────────────────────────────────────────────
-# Testing & coverage
-# ─────────────────────────────────────────────
 .tox/
 .nox/
 .coverage
@@ -65,9 +53,6 @@ coverage.xml
 .pytest_cache/
 cover/
 
-# ─────────────────────────────────────────────
-# Type checking & linting
-# ─────────────────────────────────────────────
 .mypy_cache/
 .dmypy.json
 dmypy.json
@@ -76,15 +61,9 @@ dmypy.json
 .ruff_cache/
 .ruff/
 
-# ─────────────────────────────────────────────
-# Jupyter
-# ─────────────────────────────────────────────
 .ipynb_checkpoints/
 */.ipynb_checkpoints/*
 
-# ─────────────────────────────────────────────
-# FastAPI / Uvicorn runtime
-# ─────────────────────────────────────────────
 *.log
 logs/
 *.pid
@@ -92,21 +71,14 @@ logs/
 *.pid.lock
 instance/
 
-# Celery (if used later)
 celerybeat-schedule
 celerybeat.pid
 
-# ─────────────────────────────────────────────
-# Databases
-# ─────────────────────────────────────────────
 *.sqlite3
 *.sqlite
 *.db
 db.sqlite3
 
-# ─────────────────────────────────────────────
-# IDEs & editors
-# ─────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
@@ -115,9 +87,6 @@ db.sqlite3
 .project
 .pydevproject
 
-# ─────────────────────────────────────────────
-# Operating system
-# ─────────────────────────────────────────────
 .DS_Store
 .DS_Store?
 ._*
@@ -126,10 +95,6 @@ db.sqlite3
 ehthumbs.db
 Thumbs.db
 
-# ─────────────────────────────────────────────
-# Project-specific
-# ─────────────────────────────────────────────
-# Local uploads / media
 media/
 uploads/
 storage/resume_exports/

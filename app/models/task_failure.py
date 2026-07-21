@@ -9,7 +9,7 @@ from app.db.session import Base
 
 
 class TaskFailure(Base):
-    """Sanitized record of a Celery task that exhausted its retry policy."""
+
 
     __tablename__ = "task_failures"
 

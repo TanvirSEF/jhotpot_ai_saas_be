@@ -1,29 +1,5 @@
-"""
-Facebook Integration API — Phase A2 + A3
 
-── Phase A2 (OAuth + Page Management) ─────────────────────────────────────────
-  GET  /api/v1/fb/connect                  → Returns OAuth URL for frontend redirect
-  GET  /api/v1/fb/callback                 → OAuth callback (public, called by Meta)
-  GET  /api/v1/fb/pages                    → List connected pages for authenticated user
-  GET  /api/v1/fb/pages/{page_id}          → Single page details
-  PATCH /api/v1/fb/pages/{page_id}/toggle  → Toggle bot active/inactive
-  DELETE /api/v1/fb/pages/{page_id}        → Disconnect (remove) page
-  GET  /api/v1/fb/pages/{page_id}/health   → Token validity & scope check
 
-── Phase A3 (Webhook Ingestion) ───────────────────────────────────────────────
-  GET  /api/v1/fb/webhook                  → Meta hub challenge verification (public)
-  POST /api/v1/fb/webhook                  → Webhook event ingestion (public)
-
-Security:
-  OAuth:    Short-lived JWT `state` parameter prevents CSRF on the callback.
-  Webhooks: HMAC-SHA256 signature verified against X-Hub-Signature-256 header
-            using META_APP_SECRET before any payload processing.
-  Tokens:   All Page Access Tokens are Fernet-encrypted at rest.
-
-Performance:
-  POST /webhook returns HTTP 200 in < 250 ms by immediately dispatching to
-  Celery and returning before any AI/DB heavy-lifting begins.
-"""
 
 import hashlib
 import hmac
@@ -68,14 +44,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/fb", tags=["facebook"])
 
-# ── State JWT helpers (CSRF protection) ───────────────────────────────────────
 
 _STATE_EXPIRE_MINUTES = 10
 _STATE_ALGORITHM = "HS256"
 
 
 def _create_state_token(org_id: uuid.UUID, user_id: uuid.UUID) -> tuple[str, str]:
-    """Create a signed OAuth state and return it with its one-time identifier."""
+
     now = datetime.now(timezone.utc)
     exp = now + timedelta(minutes=_STATE_EXPIRE_MINUTES)
     state_id = str(uuid.uuid4())
@@ -95,10 +70,8 @@ def _create_state_token(org_id: uuid.UUID, user_id: uuid.UUID) -> tuple[str, str
 
 
 def _decode_state_token(state: str) -> tuple[uuid.UUID, uuid.UUID, str]:
-    """
-    Decode and verify the OAuth state JWT.
-    Returns (org_id, user_id, state_id) or raises HTTPException on failure.
-    """
+
+
     try:
         payload = jwt.decode(
             state,
@@ -139,8 +112,6 @@ def _decode_state_token(state: str) -> tuple[uuid.UUID, uuid.UUID, str]:
             "Invalid OAuth state. Possible CSRF attempt.",
         ) from None
 
-
-# ── Pydantic Schemas ───────────────────────────────────────────────────────────
 
 class ConnectResponse(BaseModel):
     oauth_url: str
@@ -201,17 +172,13 @@ class PageTransferRequest(BaseModel):
     target_org_id: uuid.UUID
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
 async def _get_page_for_user(
     db: AsyncSession,
     page_record_id: uuid.UUID,
     current_user: User,
 ) -> FbPage:
-    """
-    Fetch an fb_pages row and assert it belongs to one of the current
-    user's organizations. Raises 404 / 403 accordingly.
-    """
+
+
     result = await db.execute(
         select(FbPage)
         .join(Organization, FbPage.org_id == Organization.id)
@@ -253,21 +220,14 @@ def _apply_token_health(page: FbPage, token_info: dict, *, checked_at: datetime)
     return health.missing_scopes
 
 
-# ── Endpoints ──────────────────────────────────────────────────────────────────
-
 @router.get("/connect", response_model=ConnectResponse)
 async def connect_facebook_page(
     org_id: uuid.UUID = Query(..., description="Organization to link the Facebook Page to."),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ConnectResponse:
-    """
-    Step 1 of OAuth: verify the org belongs to the user, generate a
-    CSRF-protected state token, and return the Facebook authorization URL.
 
-    The frontend should redirect the merchant's browser to `oauth_url`.
-    """
-    # Verify org ownership
+
     result = await db.execute(
         select(Organization).where(
             Organization.id == org_id,
@@ -302,23 +262,8 @@ async def facebook_oauth_callback(
     state: str = Query(..., description="CSRF state token."),
     db: AsyncSession = Depends(get_db),
 ) -> RedirectResponse:
-    """
-    Step 2 of OAuth: called directly by Meta after the user grants permissions.
 
-    Pipeline:
-      1. Verify CSRF state JWT → extract org_id + user_id
-      2. Exchange code → short-lived user token
-      3. Upgrade → long-lived user token (~60 days)
-      4. Fetch list of managed Pages + page-level tokens
-      5. Fernet-encrypt each Page Access Token
-      6. Upsert fb_pages rows (on conflict update token + name)
-      7. Redirect merchant back to frontend dashboard
 
-    This endpoint is PUBLIC (no JWT auth) because Meta sends the browser
-    here directly — the user's session JWT is not available at this point.
-    CSRF protection is handled by the signed `state` parameter.
-    """
-    # ── 1. Verify state ───────────────────────────────────────────────────────
     org_id, user_id, state_id = _decode_state_token(state)
     try:
         state_is_valid = await consume_oauth_state(state_id)
@@ -333,7 +278,7 @@ async def facebook_oauth_callback(
             "OAuth state has already been used or is no longer valid.",
         )
 
-    # ── 2. Verify org still exists and belongs to user ────────────────────────
+
     result = await db.execute(
         select(Organization).where(
             Organization.id == org_id,
@@ -348,7 +293,7 @@ async def facebook_oauth_callback(
         )
         return RedirectResponse(url=redirect_url, status_code=302)
 
-    # ── 3 & 4. Token exchange pipeline ───────────────────────────────────────
+
     try:
         short_lived = await exchange_code_for_user_token(code)
         long_lived = await upgrade_to_long_lived_token(short_lived)
@@ -369,7 +314,7 @@ async def facebook_oauth_callback(
         )
         return RedirectResponse(url=redirect_url, status_code=302)
 
-    # ── 5 & 6. Encrypt and upsert each page ──────────────────────────────────
+
     connected_count = 0
     refreshed_count = 0
     conflict_count = 0
@@ -459,7 +404,7 @@ async def facebook_oauth_callback(
         refreshed_count,
     )
 
-    # ── 7. Redirect to frontend ───────────────────────────────────────────────
+
     callback_status = (
         "partial"
         if conflict_count
@@ -481,10 +426,8 @@ async def list_connected_pages(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[FbPage]:
-    """
-    List all Facebook Pages connected to the authenticated user's organizations.
-    Optionally filter by a specific org_id.
-    """
+
+
     query = (
         select(FbPage)
         .join(Organization, FbPage.org_id == Organization.id)
@@ -504,7 +447,7 @@ async def get_connected_page(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FbPage:
-    """Get details of a single connected Facebook Page."""
+
     return await _get_page_for_user(db, page_record_id, current_user)
 
 
@@ -514,10 +457,8 @@ async def toggle_bot_active(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ToggleResponse:
-    """
-    Flip the is_bot_active flag for a connected page.
-    When False the Celery worker skips AI processing for this page's webhooks.
-    """
+
+
     page = await _get_page_for_user(db, page_record_id, current_user)
     activating = not page.is_bot_active
     if activating and (
@@ -549,10 +490,8 @@ async def disconnect_page(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """
-    Disconnect a Facebook Page, remove its remote webhook subscription, and
-    erase the encrypted token while retaining lifecycle history.
-    """
+
+
     page = await _get_page_for_user(db, page_record_id, current_user)
     if page.connection_status == "disconnected":
         return None
@@ -623,12 +562,8 @@ async def check_page_token_health(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PageHealthOut:
-    """
-    Diagnostic: decode the stored page token and check its validity + scopes
-    via Meta's debug_token endpoint.
 
-    Returns a sanitized lifecycle assessment and never exposes token payloads.
-    """
+
     page = await _get_page_for_user(db, page_record_id, current_user)
     checked_at = datetime.now(timezone.utc)
     try:
@@ -780,35 +715,17 @@ async def reconnect_page(
     return ConnectResponse(oauth_url=build_oauth_url(state))
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Phase A3 — Webhook Ingestion Endpoints
-# ══════════════════════════════════════════════════════════════════════════════
-
 @router.get("/webhook")
 async def webhook_verify(
     hub_mode: str = Query(alias="hub.mode", default=""),
     hub_verify_token: str = Query(alias="hub.verify_token", default=""),
     hub_challenge: str = Query(alias="hub.challenge", default=""),
 ) -> int:
-    """
-    Meta Webhook Verification Handshake (Phase A3).
 
-    When a developer registers a webhook callback URL in the Meta App
-    Dashboard, Meta sends a GET request with these three query parameters
-    to confirm that the endpoint is live and owned by the app developer.
 
-    Flow:
-      1. Meta sends: hub.mode="subscribe", hub.verify_token=<our_secret>,
-                     hub.challenge=<random_int_string>
-      2. We verify hub.mode and hub.verify_token match our config.
-      3. We echo back hub.challenge as a plain integer → Meta confirms.
-      4. Any mismatch → 403 Forbidden (endpoint rejected).
-
-    This endpoint is PUBLIC (no JWT auth).
-    """
     if hub_mode == "subscribe" and hub_verify_token == settings.META_VERIFY_TOKEN:
         logger.info("Webhook verification handshake successful.")
-        # Meta expects the challenge echoed back as a plain integer
+
         return int(hub_challenge)
 
     logger.warning(
@@ -827,28 +744,8 @@ async def webhook_ingest(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """
-    Meta Webhook Event Ingestion (Phase A3).
 
-    Design contract:
-      - Must return HTTP 200 within 20 s (we target < 250 ms).
-      - Any failure in AI processing must NOT delay this response.
-      - Meta retries if it receives non-200 or no response within the window.
 
-    Pipeline:
-      1. Read raw request body bytes (required for HMAC computation).
-      2. Verify X-Hub-Signature-256 header using HMAC-SHA256(APP_SECRET, body).
-         → Reject with 403 if invalid (prevents spoofed webhook calls).
-         → Use hmac.compare_digest() to prevent timing-attack leakage.
-      3. Parse body as JSON.
-      4. Pass payload to webhook_parser to produce typed event list.
-      5. Commit each provider event ID to the durable PostgreSQL inbox.
-      6. Dispatch newly accepted inbox IDs as independent Celery tasks.
-      7. Return {"status": "ok"}; broker failures remain recoverable.
-
-    Phase A4 will implement the full RAG pipeline inside the Celery worker.
-    This endpoint only enqueues — it never awaits AI results.
-    """
     from app.services.webhook_inbox import (
         mark_webhook_queued,
         persist_webhook_events,
@@ -857,10 +754,10 @@ async def webhook_ingest(
     from app.worker.reliability import correlation_headers
     from app.worker.tasks import process_fb_webhook
 
-    # ── 1. Read raw body (must happen before any framework parsing) ───────────
+
     raw_body: bytes = await request.body()
 
-    # ── 2. HMAC-SHA256 Signature Verification ─────────────────────────────────
+
     signature_header = request.headers.get("X-Hub-Signature-256", "")
 
     if not signature_header.startswith("sha256="):
@@ -877,7 +774,7 @@ async def webhook_ingest(
         hashlib.sha256,
     ).hexdigest()
 
-    # Constant-time comparison prevents timing-attack side-channel leakage
+
     if not hmac.compare_digest(received_digest, expected_digest):
         logger.warning(
             "Webhook HMAC verification failed — possible spoofed request."
@@ -887,7 +784,7 @@ async def webhook_ingest(
             detail="Invalid webhook signature.",
         )
 
-    # ── 3. Parse JSON payload ─────────────────────────────────────────────────
+
     try:
         payload: dict = json.loads(raw_body)
     except json.JSONDecodeError:
@@ -896,19 +793,17 @@ async def webhook_ingest(
             detail="Malformed JSON body.",
         ) from None
 
-    # ── 4. Classify events ────────────────────────────────────────────────────
+
     events = parse_webhook_payload(payload)
 
-    # ── 5. Dispatch each event as independent Celery task ─────────────────────
-    # Serialise typed dataclass → dict for Celery JSON serializer
+
     inbox = await persist_webhook_events(
         db,
         events,
         request_id=getattr(request.state, "request_id", None),
     )
 
-    # The inbox commit is the durability boundary. If Redis is unavailable,
-    # recovery will publish these accepted rows after the broker returns.
+
     dispatched = 0
     for event in inbox.accepted:
         task_id = str(uuid.uuid4())
@@ -937,9 +832,7 @@ async def webhook_ingest(
         dispatched,
     )
 
-    # ── 6. Immediate 200 OK ───────────────────────────────────────────────────
-    # This response goes back to Meta in < 250 ms regardless of how long
-    # the Celery RAG pipeline takes (Phase A4).
+
     return {
         "status": "ok",
         "events_accepted": len(inbox.accepted),

@@ -1,4 +1,4 @@
-"""Durable preparation and dispatch helpers for embedding tasks."""
+
 
 import uuid
 from collections.abc import Iterable
@@ -15,7 +15,7 @@ async def queue_embedding_tasks(
     *,
     headers: dict[str, str] | None = None,
 ) -> list[str]:
-    """Persist pending states before publishing tasks to Redis."""
+
     from app.worker.tasks import generate_embeddings
 
     prepared: list[tuple[str, str, uuid.UUID]] = []

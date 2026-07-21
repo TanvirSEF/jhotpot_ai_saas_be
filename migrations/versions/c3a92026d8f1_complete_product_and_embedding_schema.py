@@ -1,9 +1,5 @@
-"""Complete product fields and enforce one embedding per source entity.
 
-Revision ID: c3a92026d8f1
-Revises: a8d492f16b22
-Create Date: 2026-07-20 11:10:00.000000
-"""
+
 
 from typing import Sequence, Union
 
@@ -32,8 +28,7 @@ def upgrade() -> None:
         ),
     )
 
-    # Older task retries may have produced duplicate vectors. Keep the newest
-    # row for each source entity before adding the database invariant.
+
     op.execute(
         """
         DELETE FROM knowledge_embeddings AS older

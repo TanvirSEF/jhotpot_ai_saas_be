@@ -1,25 +1,5 @@
-"""
-Meta Graph API Reply Service — Phase A4
 
-Handles the final step of the RAG pipeline: sending the AI-generated
-reply back to the customer via the Meta Graph API.
 
-Supports two reply modes:
-  1. Messenger private message (MessengerEvent) — POST /me/messages
-  2. Public page comment reply (CommentEvent)   — POST /{comment_id}/comments
-
-Design decisions:
-  - Each function creates a fresh httpx.AsyncClient per call. Graph API
-    calls are infrequent (one per webhook event) so persistent connection
-    pooling adds complexity without measurable benefit here.
-  - messaging_type="RESPONSE" is required by Meta for replies within the
-    24-hour standard messaging window. Using RESPONSE outside that window
-    returns a 200 Messenger Error code 10 — handled by _raise_for_reply_error.
-  - The raw Page Access Token is passed in from the Celery layer after
-    Fernet decryption. This module never touches the database.
-  - Transient errors are raised with an explicit retry contract; permanent
-    Graph errors fail immediately and are captured by the worker audit trail.
-"""
 
 import logging
 
@@ -34,7 +14,7 @@ _TRANSIENT_META_CODES = {1, 2, 4, 17, 32, 341, 613}
 
 
 class GraphAPIError(RuntimeError):
-    """Sanitized Meta reply error with an explicit retry contract."""
+
 
     def __init__(self, *, retryable: bool, code: int | None = None) -> None:
         self.retryable = retryable
@@ -63,27 +43,15 @@ async def send_messenger_reply(
     recipient_psid: str,
     message_text: str,
 ) -> bool:
-    """
-    Send a private message reply to a Messenger user (PSID).
 
-    Meta endpoint: POST /v20.0/me/messages
-    messaging_type RESPONSE: allowed within the 24-hour customer service window.
 
-    Args:
-        page_access_token: Decrypted Page Access Token for the Facebook Page.
-        recipient_psid:    Page-Scoped User ID of the customer (sender).
-        message_text:      The AI-generated reply to send.
-
-    Returns:
-        True on success. Raises GraphAPIError or an httpx exception on failure.
-    """
     if not message_text or not message_text.strip():
         raise GraphAPIError(retryable=False)
 
     payload = {
         "messaging_type": "RESPONSE",
         "recipient": {"id": recipient_psid},
-        "message": {"text": message_text[:2000]},  # Meta hard limit: 2 000 chars
+        "message": {"text": message_text[:2000]},
     }
 
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -109,22 +77,8 @@ async def post_comment_reply(
     comment_id: str,
     message_text: str,
 ) -> bool:
-    """
-    Post a public reply to a comment on a Facebook Page post.
 
-    Meta endpoint: POST /v20.0/{comment_id}/comments
 
-    Unlike Messenger, Page comment replies have NO 24-hour window restriction.
-    The reply appears as a threaded response under the original comment.
-
-    Args:
-        page_access_token: Decrypted Page Access Token for the Facebook Page.
-        comment_id:        Graph API ID of the comment to reply to.
-        message_text:      The AI-generated reply to post.
-
-    Returns:
-        True on success. Raises GraphAPIError or an httpx exception on failure.
-    """
     if not message_text or not message_text.strip():
         raise GraphAPIError(retryable=False)
 

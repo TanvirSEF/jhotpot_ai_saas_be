@@ -1,4 +1,4 @@
-"""Security utilities including password hashing, JWTs, and Fernet token encryption."""
+
 
 import logging
 import uuid
@@ -13,8 +13,8 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 PASSWORD_MIN_LENGTH = 10
 _BCRYPT_MAX_BYTES = 72
-# Used only to equalize login work when an email does not exist. It is not a
-# credential and does not grant access to any account.
+
+
 DUMMY_PASSWORD_HASH = (
     "$2b$12$lreigrcUjPDfvQue1Rw8xufZkePYD4tQULEBLi.d2MuxKGGJ8bmhe"
 )
@@ -49,7 +49,7 @@ def verify_password(password: str, hashed: str) -> bool:
 
 
 def validate_password(password: str) -> None:
-    """Validate a new password without silently changing its value."""
+
     if len(password) < PASSWORD_MIN_LENGTH:
         raise ValueError(
             f"Password must be at least {PASSWORD_MIN_LENGTH} characters long"

@@ -30,7 +30,7 @@ class ResumeExportState(str, enum.Enum):
 
 
 class ResumeExport(Base):
-    """Durable state and immutable input snapshot for one PDF export."""
+
 
     __tablename__ = "resume_exports"
 

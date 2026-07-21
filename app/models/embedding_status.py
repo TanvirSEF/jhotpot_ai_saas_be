@@ -33,7 +33,7 @@ class EmbeddingEntityType(str, enum.Enum):
 
 
 class EmbeddingStatusRecord(Base):
-    """Current generation state for one knowledge-base source entity."""
+
 
     __tablename__ = "embedding_statuses"
 

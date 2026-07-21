@@ -20,7 +20,7 @@ from app.db.session import Base
 
 
 class WebhookEvent(Base):
-    """Durable, idempotent inbox record for one normalized Meta event."""
+
 
     __tablename__ = "webhook_events"
 

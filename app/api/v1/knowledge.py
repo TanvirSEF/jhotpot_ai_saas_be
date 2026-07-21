@@ -1,36 +1,5 @@
-"""
-Knowledge Base API — Phase A1 (Module A)
 
-Endpoints:
-  Products
-  --------
-  POST   /api/v1/knowledge/{org_id}/products          – Create product + queue embedding
-  GET    /api/v1/knowledge/{org_id}/products          – List products (paginated)
-  GET    /api/v1/knowledge/{org_id}/products/{id}     – Get single product
-  PUT    /api/v1/knowledge/{org_id}/products/{id}     – Full update + re-embed
-  DELETE /api/v1/knowledge/{org_id}/products/{id}     – Delete product + its embeddings
 
-  FAQs
-  ----
-  POST   /api/v1/knowledge/{org_id}/faqs              – Create FAQ + queue embedding
-  GET    /api/v1/knowledge/{org_id}/faqs              – List FAQs
-  GET    /api/v1/knowledge/{org_id}/faqs/{id}         – Get single FAQ
-  PUT    /api/v1/knowledge/{org_id}/faqs/{id}         – Update FAQ + re-embed
-  DELETE /api/v1/knowledge/{org_id}/faqs/{id}         – Delete FAQ + its embeddings
-
-  Diagnostic
-  ----------
-  GET    /api/v1/knowledge/{org_id}/search            – Semantic search test
-
-Design notes:
-  * All mutating endpoints verify org ownership via `_get_owned_org()`.
-  * Embedding generation is always queued as a Celery background task so the
-    HTTP response is never delayed by OpenAI round-trips.
-  * Re-embedding uses an atomic database upsert, so the last valid vector
-    remains searchable until its replacement is ready.
-  * Pagination on list endpoints uses limit/offset for simplicity; can be
-    migrated to cursor-based later.
-"""
 
 import uuid
 from datetime import datetime
@@ -63,16 +32,13 @@ from app.worker.reliability import correlation_headers
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 _MAX_REBUILD_TARGETS = 1000
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Shared helpers
-# ──────────────────────────────────────────────────────────────────────────────
 
 async def _get_owned_org(
     org_id: uuid.UUID,
     current_user: User,
     db: AsyncSession,
 ) -> Organization:
-    """Fetch org and assert current_user is the owner. Raises 404 / 403."""
+
     result = await db.execute(select(Organization).where(Organization.id == org_id))
     org = result.scalar_one_or_none()
     if not org:
@@ -85,7 +51,7 @@ async def _get_owned_org(
 async def _delete_entity_embeddings(
     db: AsyncSession, org_id: uuid.UUID, entity_type: str, entity_id: uuid.UUID
 ) -> None:
-    """Remove all knowledge vectors for a specific entity (pre-update / delete)."""
+
     await db.execute(
         delete(KnowledgeEmbedding).where(
             KnowledgeEmbedding.org_id == org_id,
@@ -100,10 +66,6 @@ async def _delete_entity_embeddings(
         entity_id=entity_id,
     )
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Product Schemas
-# ──────────────────────────────────────────────────────────────────────────────
 
 class ProductCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
@@ -139,10 +101,6 @@ class ProductOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Product Endpoints
-# ──────────────────────────────────────────────────────────────────────────────
-
 @router.post(
     "/{org_id}/products",
     response_model=ProductOut,
@@ -170,7 +128,7 @@ async def create_product(
     db.add(product)
     await db.flush()
 
-    # Queue background embedding generation
+
     await queue_embedding_tasks(
         db,
         [(org_id, "product", product.id)],
@@ -237,12 +195,12 @@ async def update_product(
     if not product:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Product not found.")
 
-    # Apply partial updates
+
     update_data = body.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(product, field, value)
 
-    # Keep the current vector searchable until the atomic upsert replaces it.
+
     await queue_embedding_tasks(
         db,
         [(org_id, "product", product.id)],
@@ -269,15 +227,11 @@ async def delete_product(
     if not product:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Product not found.")
 
-    # Delete embeddings first (FK cascade handles it, but explicit is safer)
+
     await _delete_entity_embeddings(db, org_id, "product", product_id)
     await db.delete(product)
     await db.commit()
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# FAQ Schemas
-# ──────────────────────────────────────────────────────────────────────────────
 
 class FaqCreate(BaseModel):
     question: str = Field(..., min_length=1)
@@ -297,10 +251,6 @@ class FaqOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# FAQ Endpoints
-# ──────────────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/{org_id}/faqs",
@@ -383,7 +333,7 @@ async def update_faq(
     for field, value in update_data.items():
         setattr(faq, field, value)
 
-    # Keep the current vector searchable until the atomic upsert replaces it.
+
     await queue_embedding_tasks(
         db,
         [(org_id, "faq", faq.id)],
@@ -414,10 +364,6 @@ async def delete_faq(
     await db.delete(faq)
     await db.commit()
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Diagnostic: Vector Similarity Search
-# ──────────────────────────────────────────────────────────────────────────────
 
 class EmbeddingStatusOut(BaseModel):
     entity_type: str
@@ -567,22 +513,15 @@ async def semantic_search(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[SearchResult]:
-    """
-    Diagnostic endpoint: embed *q* on-the-fly and return the top-k most
-    semantically similar knowledge chunks for the given organisation.
 
-    This mirrors the retrieval step inside the Celery RAG worker so
-    merchants can validate their knowledge base quality without needing to
-    trigger a real Facebook event.
-    """
+
     from app.services.embedding import get_embedding
 
     await _get_owned_org(org_id, current_user, db)
 
     query_vector = await get_embedding(q)
 
-    # pgvector cosine distance: <=> operator (lower = closer).
-    # We convert to similarity = 1 - distance for human-readable output.
+
     with observe_operation("vector", "diagnostic_search"):
         rows = await db.execute(
             select(

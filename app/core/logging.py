@@ -1,4 +1,4 @@
-"""Centralized structured logging with correlation context."""
+
 
 import json
 import logging
@@ -23,7 +23,7 @@ _EXTRA_FIELDS = (
 
 
 class JsonFormatter(logging.Formatter):
-    """Emit one machine-parseable event without serializing arbitrary objects."""
+
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, object] = {
@@ -78,8 +78,8 @@ def configure_logging() -> None:
     root.addHandler(handler)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
-    # These libraries can include credential-bearing query strings in access
-    # logs. Application-owned dependency metrics provide the safe signal.
+
+
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)

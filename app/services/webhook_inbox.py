@@ -1,4 +1,4 @@
-"""Transactional inbox primitives for Meta webhook idempotency and recovery."""
+
 
 import uuid
 from dataclasses import asdict, dataclass
@@ -31,7 +31,7 @@ class InboxWriteResult:
 
 
 def normalized_payload(event: ParsedWebhookEvent) -> dict:
-    """Create the bounded worker payload; never persist Meta's raw envelope."""
+
     payload = asdict(event)
     payload.pop("raw", None)
     payload["type"] = type(event).__name__
@@ -44,7 +44,7 @@ async def persist_webhook_events(
     *,
     request_id: str | None,
 ) -> InboxWriteResult:
-    """Atomically insert recognized events and ignore provider redeliveries."""
+
     page_ids = {event.page_id for event in events if event.page_id}
     pages_by_external_id: dict[str, FbPage] = {}
     if page_ids:
@@ -103,7 +103,7 @@ async def mark_webhook_queued(
     event_id: uuid.UUID,
     task_id: str,
 ) -> None:
-    """Record successful publication without overwriting a fast worker."""
+
     now = datetime.now(timezone.utc)
     await db.execute(
         update(WebhookEvent)
@@ -119,7 +119,7 @@ async def claim_webhook_event(
     db: AsyncSession,
     event_id: uuid.UUID,
 ) -> WebhookEvent | None:
-    """Atomically grant one worker the right to process an inbox event."""
+
     now = datetime.now(timezone.utc)
     result = await db.execute(
         update(WebhookEvent)
@@ -147,7 +147,7 @@ async def transition_webhook_event(
     state: str,
     error_code: str | None = None,
 ) -> None:
-    """Persist one explicit lifecycle transition using sanitized metadata."""
+
     now = datetime.now(timezone.utc)
     values: dict = {"state": state, "last_error_code": error_code}
     if state == "delivering":
@@ -165,7 +165,7 @@ async def recovery_candidates(
     *,
     limit: int = RECOVERY_BATCH_SIZE,
 ) -> list[AcceptedWebhookEvent]:
-    """Release abandoned pre-delivery claims and return publishable events."""
+
     now = datetime.now(timezone.utc)
     stale_before = now - timedelta(minutes=PROCESSING_LEASE_MINUTES)
     await db.execute(

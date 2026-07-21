@@ -1,16 +1,5 @@
-"""
-Celery background tasks — NexusSuite AI
 
-All tasks use `bind=True` so `self` gives access to retry machinery. Celery
-entry points are synchronous and use `asyncio.run()` around their async
-implementations. Each task owns an async SQLAlchemy engine and reliably
-disposes it before returning.
 
-Task registry:
-  • generate_embeddings  — OpenAI → pgvector write (Products, FAQs, Guidelines)
-  • process_fb_webhook   — Meta webhook RAG pipeline (Phase A4)
-  • export_resume_pdf    — WeasyPrint PDF compilation (Phase B)
-"""
 
 import asyncio
 import hashlib
@@ -31,10 +20,6 @@ from app.worker.reliability import (
 logger = logging.getLogger(__name__)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# generate_embeddings
-# ──────────────────────────────────────────────────────────────────────────────
-
 @celery_app.task(
     name="generate_embeddings",
     bind=True,
@@ -45,17 +30,8 @@ logger = logging.getLogger(__name__)
     time_limit=60,
 )
 def generate_embeddings(self, entity_type: str, entity_id: str) -> dict:
-    """
-    Fetch the source entity from DB, build the canonical text blob,
-    call OpenAI text-embedding-3-small, then upsert into knowledge_embeddings.
 
-    Args:
-        entity_type: One of {"product", "faq", "guideline"}.
-        entity_id:   UUID string of the source row.
 
-    Returns:
-        dict with status and embedding dimensionality for Celery result backend.
-    """
     try:
         result = asyncio.run(
             _run_embedding(entity_type, entity_id, task_id=str(self.request.id))
@@ -89,7 +65,7 @@ async def _run_embedding(
     *,
     task_id: str | None = None,
 ) -> dict:
-    """Async implementation called from the sync Celery task wrapper."""
+
     from sqlalchemy import delete, func, select
     from sqlalchemy.dialects.postgresql import insert
 
@@ -106,7 +82,7 @@ async def _run_embedding(
     entity_uuid = uuid.UUID(entity_id)
 
     async with _task_db_session() as db:
-        # ── 1. Fetch source entity ────────────────────────────────────────────
+
         if entity_type == "product":
             product_result = await db.execute(
                 select(Product).where(Product.id == entity_uuid)
@@ -175,7 +151,7 @@ async def _run_embedding(
         else:
             raise PermanentTaskError("Unsupported embedding entity type.")
 
-        # ── 2. Generate embedding ────────────────────────────────────────────
+
         await set_embedding_status(
             db,
             org_id=org_id,
@@ -188,7 +164,7 @@ async def _run_embedding(
         logger.info("Generating embedding [%s:%s] text_len=%d", entity_type, entity_id, len(text))
         vector = await get_embedding(text)
 
-        # One statement preserves the old vector until the replacement commits.
+
         statement = insert(KnowledgeEmbedding).values(
             id=uuid.uuid4(),
             org_id=org_id,
@@ -230,11 +206,8 @@ async def _run_embedding(
             "dims": len(vector),
         }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# process_fb_webhook  — Full RAG Pipeline (Phase A4)
-# ──────────────────────────────────────────────────────────────────────────────
 
-_TWENTY_FOUR_HOURS_S = 86_400   # Meta standard messaging window (seconds)
+_TWENTY_FOUR_HOURS_S = 86_400
 
 
 @celery_app.task(
@@ -247,31 +220,8 @@ _TWENTY_FOUR_HOURS_S = 86_400   # Meta standard messaging window (seconds)
     time_limit=75,
 )
 def process_fb_webhook(self, event_ref: str | dict) -> dict:
-    """
-    Full RAG + Meta Graph API pipeline for a single classified webhook event.
 
-    Called by the FastAPI webhook endpoint (Phase A3) once per event.
-    Each event is processed independently so retries don't affect siblings.
 
-    Args:
-        event_ref: Durable webhook inbox UUID. A normalized event dict remains
-                   accepted temporarily for rolling-deploy compatibility.
-
-    Pipeline:
-      1. Identify event type (MessengerEvent | CommentEvent)
-      2. Look up fb_pages row → get org_id, is_bot_active, encrypted token
-      3. Guard: skip if bot is inactive for this page
-      4. Guard: 24-hour messaging window (Messenger only, per PRD §6.2)
-      5. Decrypt Page Access Token
-      6. Fetch org business_name + global_guidelines
-      7. RAG retrieval (pgvector cosine search, top 4 chunks)
-      8. Build system prompt with guardrails
-      9. Call OpenAI LLM (gpt-4o-mini)
-      10. Send reply via Meta Graph API
-
-    Returns:
-        Status dict stored in Celery result backend.
-    """
     legacy_event = event_ref if isinstance(event_ref, dict) else None
     inbox_event_id = None if legacy_event is not None else str(event_ref)
     try:
@@ -282,7 +232,7 @@ def process_fb_webhook(self, event_ref: str | dict) -> dict:
             inbox_event_id,
         )
         if legacy_event is not None:
-            # Rolling-deploy compatibility for tasks published before Phase 7.
+
             return asyncio.run(_run_webhook_pipeline(legacy_event))
         if inbox_event_id is None:
             raise PermanentTaskError("Webhook inbox event ID is required.")
@@ -318,7 +268,7 @@ def process_fb_webhook(self, event_ref: str | dict) -> dict:
 
 
 async def _run_inbox_webhook_pipeline(event_id: str) -> dict:
-    """Claim one durable event, run it once, and persist its terminal state."""
+
     from app.services.webhook_inbox import (
         claim_webhook_event,
         transition_webhook_event,
@@ -376,7 +326,7 @@ async def _run_webhook_pipeline(
     before_delivery: Callable[[], Awaitable[None]] | None = None,
     webhook_event_id: uuid.UUID | None = None,
 ) -> dict:
-    """Async implementation — called from the sync Celery wrapper."""
+
     import time
 
     from sqlalchemy import select
@@ -390,7 +340,7 @@ async def _run_webhook_pipeline(
     page_id = event_dict.get("page_id", "")
 
     async with _task_db_session() as db:
-        # ── 1. Look up the Facebook Page record ──────────────────────────────
+
         result = await db.execute(
             select(FbPage).where(FbPage.page_id == page_id)
         )
@@ -400,7 +350,7 @@ async def _run_webhook_pipeline(
             logger.warning("No fb_pages record found for page_id=%s — skipping.", page_id)
             return {"status": "skipped", "reason": "page_not_registered"}
 
-        # ── 2. Guard: bot must be active for this page ───────────────────────
+
         if not fb_page.is_bot_active:
             logger.info("Bot is inactive for page=%s — skipping.", page_id)
             return {"status": "skipped", "reason": "bot_inactive"}
@@ -419,7 +369,7 @@ async def _run_webhook_pipeline(
             )
             return {"status": "skipped", "reason": "page_not_ready"}
 
-        # ── 3. 24-hour messaging window check (Messenger only) ────────────────
+
         if event_type == "MessengerEvent":
             event_timestamp_ms = event_dict.get("timestamp", 0)
             elapsed_seconds = time.time() - (event_timestamp_ms / 1000)
@@ -430,7 +380,7 @@ async def _run_webhook_pipeline(
                 )
                 return {"status": "skipped", "reason": "24h_window_expired"}
 
-        # ── 4. Decrypt Page Access Token ──────────────────────────────────────
+
         encrypted_token = fb_page.encrypted_access_token
         if not encrypted_token:
             raise PermanentTaskError("Page has no stored access token.")
@@ -440,7 +390,7 @@ async def _run_webhook_pipeline(
             logger.error("Token decryption failed for page=%s", page_id)
             raise PermanentTaskError("Stored Page token could not be decrypted.") from exc
 
-        # ── 5. Fetch org business name + guidelines ───────────────────────────
+
         org_result = await db.execute(
             select(Organization).where(Organization.id == fb_page.org_id)
         )
@@ -452,7 +402,7 @@ async def _run_webhook_pipeline(
         business_name = org.business_name
         guidelines = org.global_guidelines
 
-        # ── 6. Determine customer message text ───────────────────────────────
+
         if event_type == "MessengerEvent":
             customer_message = event_dict.get("message_text", "").strip()
         elif event_type == "CommentEvent":
@@ -470,7 +420,7 @@ async def _run_webhook_pipeline(
             event_type, page_id, org.id, len(customer_message),
         )
 
-        # ── 7-9. RAG retrieval + LLM generation ──────────────────────────────
+
         rag_result = await run_rag_pipeline(
             db=db,
             org_id=fb_page.org_id,
@@ -489,9 +439,7 @@ async def _run_webhook_pipeline(
             )
         ai_reply = rag_result.reply
 
-        # ── 10. Send reply via Meta Graph API ────────────────────────────────
-        # This state is intentionally not auto-recovered. If a worker dies
-        # around the external call, replaying blindly could send two replies.
+
         if before_delivery is not None:
             await before_delivery()
 
@@ -500,7 +448,7 @@ async def _run_webhook_pipeline(
             await send_messenger_reply(plain_token, sender_psid, ai_reply)
             reply_target = f"messenger:{sender_psid}"
 
-        else:  # CommentEvent
+        else:
             comment_id = event_dict.get("comment_id", "")
             await post_comment_reply(plain_token, comment_id, ai_reply)
             reply_target = f"comment:{comment_id}"
@@ -524,17 +472,13 @@ async def _run_webhook_pipeline(
         }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# export_resume_pdf  (Phase B3)
-# ──────────────────────────────────────────────────────────────────────────────
-
 @celery_app.task(
     name="recover_fb_webhook_inbox",
     soft_time_limit=30,
     time_limit=45,
 )
 def recover_fb_webhook_inbox() -> dict:
-    """Republish committed events left behind by broker or worker failures."""
+
     return asyncio.run(_recover_fb_webhook_inbox())
 
 
@@ -579,9 +523,8 @@ async def _recover_fb_webhook_inbox() -> dict:
     time_limit=120,
 )
 def export_resume_pdf(self, export_id: str) -> dict:
-    """
-    Compile, validate, and durably store one immutable resume export snapshot.
-    """
+
+
     try:
         result = asyncio.run(
             _run_export_resume_pdf(export_id, task_id=str(self.request.id))
@@ -610,7 +553,7 @@ async def _run_export_resume_pdf(
     *,
     task_id: str | None = None,
 ) -> dict:
-    """Advance one export job through processing to a validated ready file."""
+
     from pydantic import ValidationError
     from sqlalchemy import func, select
 
@@ -719,7 +662,7 @@ async def _mark_resume_export_failed(export_id: str, error_code: str) -> None:
     time_limit=45,
 )
 def recover_resume_exports() -> dict:
-    """Republish stale committed export jobs after broker or worker failures."""
+
     return asyncio.run(_recover_resume_exports())
 
 

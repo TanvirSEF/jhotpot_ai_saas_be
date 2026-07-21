@@ -1,4 +1,4 @@
-"""Redis-backed security controls shared by authentication and OAuth flows."""
+
 
 import hashlib
 import logging
@@ -36,7 +36,7 @@ class AuthRateLimitExceeded(Exception):
 
 
 class SecurityStoreUnavailable(Exception):
-    """Raised when a security decision cannot be made because Redis failed."""
+    pass
 
 
 def _identity_digest(value: str) -> str:
@@ -69,7 +69,7 @@ async def enforce_auth_rate_limit(
     account_identifier: str,
     redis_client: Any | None = None,
 ) -> None:
-    """Apply independent per-IP and per-account fixed-window limits."""
+
     client = redis_client or redis.from_url(
         settings.REDIS_URL,
         encoding="utf-8",
@@ -113,7 +113,7 @@ async def register_oauth_state(
     ttl_seconds: int,
     redis_client: Any | None = None,
 ) -> None:
-    """Register an OAuth state identifier that may be consumed exactly once."""
+
     client = redis_client or redis.from_url(
         settings.REDIS_URL,
         encoding="utf-8",
@@ -140,7 +140,7 @@ async def consume_oauth_state(
     *,
     redis_client: Any | None = None,
 ) -> bool:
-    """Atomically consume a registered OAuth state identifier."""
+
     client = redis_client or redis.from_url(
         settings.REDIS_URL,
         encoding="utf-8",

@@ -1,4 +1,4 @@
-"""Schema-validated ATS resume optimization."""
+
 
 import json
 import logging
@@ -29,22 +29,22 @@ Return the requested structured result and follow these rules:
 
 
 class ResumeOptimizationError(RuntimeError):
-    """Safe base error for an optimization that must not be persisted."""
+    pass
 
 
 class ResumeOptimizationProviderError(ResumeOptimizationError):
-    """The model provider failed or refused to return an answer."""
+    pass
 
 
 class ResumeOptimizationOutputError(ResumeOptimizationError):
-    """The provider response did not satisfy the complete resume contract."""
+    pass
 
 
 async def optimize_resume_against_jd(
     raw_resume: dict[str, Any],
     target_jd: str,
 ) -> ResumeOptimizationResult:
-    """Return a fully validated optimization or raise without a fallback result."""
+
     try:
         canonical_resume = ResumeContent.model_validate(raw_resume)
     except ValidationError as exc:

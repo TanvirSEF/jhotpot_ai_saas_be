@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class StrictSchema(BaseModel):
-    """Reject undeclared fields so every resume representation stays canonical."""
+
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

@@ -93,9 +93,7 @@
   </style>
 </head>
 <body>
-
-  <!-- Header Section -->
-  <div class="header">
+<div class="header">
     <div class="name">{{ personal_info.full_name }}</div>
     <div class="contact-info">
       {% if personal_info.email %}<span>{{ personal_info.email }}</span>{% endif %}
@@ -106,15 +104,11 @@
       {% if personal_info.portfolio_url %}<span class="contact-separator">|</span><span>{{ personal_info.portfolio_url }}</span>{% endif %}
     </div>
   </div>
-
-  <!-- Summary Section -->
-  {% if personal_info.summary %}
+{% if personal_info.summary %}
   <div class="section-title">Professional Summary</div>
   <div class="summary">{{ personal_info.summary }}</div>
   {% endif %}
-
-  <!-- Work Experience Section -->
-  {% if work_experiences and work_experiences|length > 0 %}
+{% if work_experiences and work_experiences|length > 0 %}
   <div class="section-title">Work Experience</div>
   {% for exp in work_experiences %}
   <div class="item-header clearfix">
@@ -130,9 +124,7 @@
   {% endif %}
   {% endfor %}
   {% endif %}
-
-  <!-- Education Section -->
-  {% if education and education|length > 0 %}
+{% if education and education|length > 0 %}
   <div class="section-title">Education</div>
   {% for edu in education %}
   <div class="item-header clearfix">
@@ -146,9 +138,7 @@
   {% endif %}
   {% endfor %}
   {% endif %}
-
-  <!-- Skills Section -->
-  {% if skill_categories and skill_categories|length > 0 %}
+{% if skill_categories and skill_categories|length > 0 %}
   <div class="section-title">Skills</div>
   {% for cat in skill_categories %}
   <div class="skill-category">
@@ -156,9 +146,7 @@
   </div>
   {% endfor %}
   {% endif %}
-
-  <!-- Certifications Section -->
-  {% if certifications and certifications|length > 0 %}
+{% if certifications and certifications|length > 0 %}
   <div class="section-title">Certifications</div>
   {% for cert in certifications %}
   <div class="item-header clearfix">
@@ -167,9 +155,7 @@
   </div>
   {% endfor %}
   {% endif %}
-
-  <!-- Projects Section -->
-  {% if projects and projects|length > 0 %}
+{% if projects and projects|length > 0 %}
   <div class="section-title">Projects</div>
   {% for proj in projects %}
   <div class="item-header clearfix">

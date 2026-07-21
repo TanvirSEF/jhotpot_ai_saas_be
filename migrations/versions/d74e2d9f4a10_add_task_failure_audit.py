@@ -1,9 +1,5 @@
-"""Add sanitized terminal Celery failure audit records.
 
-Revision ID: d74e2d9f4a10
-Revises: c3a92026d8f1
-Create Date: 2026-07-20 14:00:00.000000
-"""
+
 
 from typing import Sequence, Union
 

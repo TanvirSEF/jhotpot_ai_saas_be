@@ -1,10 +1,5 @@
-"""add_resumes_table
 
-Revision ID: a8d492f16b22
-Revises: 35bb75b87e31
-Create Date: 2026-07-20 10:30:00.000000
 
-"""
 
 from typing import Sequence, Union
 
@@ -12,7 +7,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-# revision identifiers, used by Alembic.
+
 revision: str = 'a8d492f16b22'
 down_revision: Union[str, None] = '35bb75b87e31'
 branch_labels: Union[str, Sequence[str], None] = None

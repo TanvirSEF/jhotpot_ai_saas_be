@@ -1,15 +1,5 @@
-"""step1_module_a_schema
 
-Revision ID: 35bb75b87e31
-Revises: e79e777a4bcc
-Create Date: 2026-07-20 00:06:57.669638
 
-MANUAL EDITS:
-  1. users.id INTEGER → UUID is performed through a temporary UUID column so
-     existing user rows survive the migration.
-  2. Added HNSW index on knowledge_embeddings.embedding for sub-20ms
-     cosine similarity search (PRD §6.1).
-"""
 
 from typing import Sequence, Union
 
@@ -17,9 +7,9 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-import pgvector.sqlalchemy  # noqa: F401 — registers Vector type with SQLAlchemy
+import pgvector.sqlalchemy  # noqa: F401
 
-# revision identifiers, used by Alembic.
+
 revision: str = '35bb75b87e31'
 down_revision: Union[str, None] = 'e79e777a4bcc'
 branch_labels: Union[str, Sequence[str], None] = None
@@ -27,13 +17,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # PostgreSQL registers the pgvector extension under the name `vector`.
-    # It must exist before a VECTOR column or HNSW index can be created.
+
+
     op.execute('CREATE EXTENSION IF NOT EXISTS vector;')
 
-    # ── 1. Convert `users.id` to UUID without deleting user data ────────────
-    # PostgreSQL has no meaningful INTEGER → UUID cast. A temporary column
-    # gives every existing row a UUID before the old primary key is removed.
+
     op.add_column(
         'users',
         sa.Column(
@@ -65,7 +53,7 @@ def upgrade() -> None:
         ),
     )
 
-    # ── 2. Create Module A tables ───────────────────────────────────────────
+
     op.create_table(
         'organizations',
         sa.Column('id', sa.Uuid(), nullable=False),
@@ -151,11 +139,7 @@ def upgrade() -> None:
         'knowledge_embeddings', ['org_id'], unique=False,
     )
 
-    # ── 3. HNSW index for pgvector cosine similarity search ─────────────────
-    # PRD §6.1: vector search must complete in < 20ms at scale.
-    # HNSW (Hierarchical Navigable Small World) provides approximate nearest
-    # neighbour search in O(log n) vs sequential scan O(n).
-    # m=16, ef_construction=64 are production-standard starting values.
+
     op.execute(
         """
         CREATE INDEX ix_knowledge_embeddings_embedding_hnsw
@@ -211,10 +195,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_organizations_user_id'), table_name='organizations')
     op.drop_table('organizations')
 
-    # Restore the original INTEGER primary-key shape without deleting users.
-    # UUID values cannot be converted back to their historical integers, so
-    # downgrade assigns stable replacement integers while preserving all
-    # account data.
+
     op.drop_column('users', 'is_active')
     op.execute('CREATE SEQUENCE users_id_seq;')
     op.add_column('users', sa.Column('id_integer', sa.Integer(), nullable=True))

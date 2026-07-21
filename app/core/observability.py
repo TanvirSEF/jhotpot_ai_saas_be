@@ -1,4 +1,4 @@
-"""Low-cardinality metrics and request/task correlation primitives."""
+
 
 import logging
 import time
@@ -71,7 +71,7 @@ def current_task_id() -> str | None:
 
 
 class OperationTimer:
-    """Record duration and outcome in both Prometheus and structured logs."""
+
 
     def __init__(self, component: str, operation: str) -> None:
         self.component = component
@@ -112,7 +112,7 @@ def observe_operation(component: str, operation: str) -> OperationTimer:
 
 
 def observed_async(component: str, operation: str):
-    """Instrument an async boundary without changing its public contract."""
+
 
     def decorator(function):
         @wraps(function)
