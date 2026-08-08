@@ -128,4 +128,4 @@ async def login(
         )
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "User account is inactive")
-    return Token(access_token=create_access_token(str(user.id)))
+    return Token(access_token=create_access_token(str(user.id), user.is_superadmin))

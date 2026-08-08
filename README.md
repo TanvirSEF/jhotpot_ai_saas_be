@@ -78,9 +78,11 @@ alembic history
 ## Authentication security
 
 Access tokens include and validate issuer, audience, issue time, not-before,
-expiry, token type, subject, and unique token ID claims. Tokens issued before
-this claim contract was introduced are intentionally invalid; users must log in
-again after deployment.
+expiry, token type, subject, and unique token ID claims. Login tokens also
+carry a non-required `is_superadmin` claim so clients can render role-based UI;
+authorization is still enforced from the database on every admin request. Tokens
+issued before this claim contract was introduced are intentionally invalid;
+users must log in again after deployment.
 
 Login and registration use independent per-IP and per-account Redis limits. If
 Redis cannot make the security decision, authentication fails closed with HTTP

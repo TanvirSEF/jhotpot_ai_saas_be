@@ -58,7 +58,9 @@ def validate_password(password: str) -> None:
         raise ValueError("Password must not exceed 72 UTF-8 bytes")
 
 
-def create_access_token(sub: str, expires_in: timedelta | None = None) -> str:
+def create_access_token(
+    sub: str, is_superadmin: bool = False, expires_in: timedelta | None = None
+) -> str:
     now = datetime.now(timezone.utc)
     exp = now + (
         expires_in or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -72,6 +74,7 @@ def create_access_token(sub: str, expires_in: timedelta | None = None) -> str:
         "aud": settings.JWT_AUDIENCE,
         "jti": str(uuid.uuid4()),
         "token_type": "access",
+        "is_superadmin": is_superadmin,
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
