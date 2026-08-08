@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from app.api.v1 import auth, bot, fb, knowledge, org, resume
+from app.api.v1 import admin, auth, bot, fb, knowledge, org, resume
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.startup_checks import validate_configuration
@@ -96,3 +96,4 @@ app.include_router(knowledge.router, prefix=settings.API_V1_STR)
 app.include_router(fb.router, prefix=settings.API_V1_STR)
 app.include_router(bot.router, prefix=settings.API_V1_STR)
 app.include_router(resume.router, prefix=settings.API_V1_STR)
+app.include_router(admin.router, prefix=settings.API_V1_STR)

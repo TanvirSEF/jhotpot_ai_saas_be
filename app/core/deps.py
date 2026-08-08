@@ -40,3 +40,15 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user
+
+
+async def get_current_superadmin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Dependency that allows access only to superadmin users."""
+    if not current_user.is_superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Superadmin privileges required.",
+        )
+    return current_user
