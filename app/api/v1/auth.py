@@ -18,6 +18,7 @@ from app.core.security_store import (
     SecurityStoreUnavailable,
     enforce_auth_rate_limit,
 )
+from app.core.deps import get_current_user
 from app.db.session import get_db
 from app.models import User
 
