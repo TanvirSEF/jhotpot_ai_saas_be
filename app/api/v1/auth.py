@@ -48,6 +48,7 @@ class UserOut(BaseModel):
     id: uuid.UUID
     email: EmailStr
     full_name: str | None
+    is_superadmin: bool
 
     model_config = {"from_attributes": True}
 
@@ -129,3 +130,10 @@ async def login(
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "User account is inactive")
     return Token(access_token=create_access_token(str(user.id), user.is_superadmin))
+
+
+@router.get("/me", response_model=UserOut)
+async def get_me(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    return current_user
